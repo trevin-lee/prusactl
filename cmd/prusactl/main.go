@@ -53,7 +53,8 @@ Usage:
   prusactl download PATH [DEST]      copy a file from the printer's storage to this
                                      computer, e.g. /usb/part.bgcode
   prusactl api [METHOD] PATH [JSON]  call an API directly: /api/... goes to the
-                                     printer, /app/... to Prusa Connect
+                                     printer, /app/... to Prusa Connect. API keys
+                                     and tokens are masked; --raw shows them
   prusactl version
 `
 
@@ -308,6 +309,20 @@ func download(ctx context.Context, lc *link.Client, lcErr error, args []string) 
 }
 
 func apiCommand(ctx context.Context, cc *connect.Client, lc *link.Client, lcErr error, args []string) error {
+	// Responses can carry the printer's API keys and camera tokens. Mask them
+	// unless asked, so output pasted into a chat or read by an agent doesn't
+	// leak them.
+	raw := false
+	rest := args[:0:0]
+	for _, a := range args {
+		if a == "--raw" {
+			raw = true
+		} else {
+			rest = append(rest, a)
+		}
+	}
+	args = rest
+
 	method := http.MethodGet
 	if len(args) > 0 && !strings.HasPrefix(args[0], "/") {
 		method = strings.ToUpper(args[0])
@@ -357,6 +372,10 @@ func apiCommand(ctx context.Context, cc *connect.Client, lc *link.Client, lcErr 
 	if err != nil {
 		return err
 	}
+	redacted := false
+	if !raw {
+		out, redacted = server.RedactJSON(out)
+	}
 	var pretty bytes.Buffer
 	if json.Indent(&pretty, out, "", "  ") == nil {
 		out = pretty.Bytes()
@@ -365,6 +384,9 @@ func apiCommand(ctx context.Context, cc *connect.Client, lc *link.Client, lcErr 
 	os.Stdout.Write(out)
 	if len(out) > 0 {
 		fmt.Println()
+	}
+	if redacted {
+		fmt.Fprintln(os.Stderr, "(API keys and tokens shown as [redacted]; add --raw to see them)")
 	}
 	return nil
 }

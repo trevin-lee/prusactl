@@ -146,6 +146,10 @@ prusactl api [METHOD] PATH [JSON]  /api/... to the printer, /app/... to Prusa Co
 API key instead of the password, and `--password-stdin` reads the secret from a
 pipe.
 
+`prusactl api` masks API keys and tokens in responses (Connect's printer record
+carries the PrusaLink and Connect keys), so its output is safe to paste or hand
+to an agent. `--raw` shows them.
+
 ## Limits
 
 - **It has no hands.** It can't clear the build plate, swap a spool, or fix a

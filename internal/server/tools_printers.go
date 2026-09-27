@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -55,6 +56,27 @@ func redactRaw(raw json.RawMessage) any {
 		return raw
 	}
 	return redact(v)
+}
+
+// RedactJSON masks credential fields in a JSON document, as the MCP tools do,
+// and reports whether it masked anything. Numbers keep their exact digits;
+// input that isn't a single JSON document comes back unchanged.
+func RedactJSON(raw []byte) ([]byte, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if dec.Decode(&v) != nil || dec.More() {
+		return raw, false
+	}
+	before, err := json.Marshal(v)
+	if err != nil {
+		return raw, false
+	}
+	after, err := json.Marshal(redact(v))
+	if err != nil || bytes.Equal(before, after) {
+		return raw, false
+	}
+	return after, true
 }
 
 type snapshotInput struct {
