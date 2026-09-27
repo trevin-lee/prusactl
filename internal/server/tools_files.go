@@ -34,6 +34,7 @@ type uploadInput struct {
 	Filename    string `json:"filename,omitempty" jsonschema:"name on the printer; default is the local file name"`
 	Then        string `json:"then,omitempty" jsonschema:"after uploading: none (just store it), print (start it right away), or queue (add to the Prusa Connect print queue); default none"`
 	Overwrite   bool   `json:"overwrite,omitempty" jsonschema:"replace a file with the same name on the printer (direct route)"`
+	PlateClear  bool   `json:"plate_clear,omitempty" jsonschema:"set only after confirming (camera or a person) that nothing is left on the plate; required when the printer is FINISHED or STOPPED, since the last print may still be there"`
 }
 
 type downloadInput struct {
@@ -55,7 +56,8 @@ type queueInput struct {
 
 type startPrintInput struct {
 	printerRef
-	Path string `json:"path" jsonschema:"file on the printer as list_printer_files reports it, e.g. /usb/3DBENC~2.BGC"`
+	Path       string `json:"path" jsonschema:"file on the printer as list_printer_files reports it, e.g. /usb/3DBENC~2.BGC"`
+	PlateClear bool   `json:"plate_clear,omitempty" jsonschema:"set only after confirming (camera or a person) that nothing is left on the plate; required when the printer is FINISHED or STOPPED, since the last print may still be there"`
 }
 
 type deleteFilesInput struct {
@@ -88,11 +90,11 @@ func (s *Server) addFileTools() {
 		var out json.RawMessage
 		switch {
 		case t.direct && dir == "":
-			_, err = s.link.Get(ctx, "/api/v1/storage", &out)
+			_, err = s.direct().Get(ctx, "/api/v1/storage", &out)
 		case t.direct:
 			var path string
 			if path, err = link.FilePath(dir); err == nil {
-				_, err = s.link.Get(ctx, path, &out)
+				_, err = s.direct().Get(ctx, path, &out)
 			}
 			if err == nil {
 				out = compactFolder(dir, out)
@@ -126,7 +128,7 @@ func (s *Server) addFileTools() {
 			for i, p := range in.Paths {
 				path, err := link.FilePath(p)
 				if err == nil {
-					_, err = s.link.JSON(ctx, link.Request{Method: http.MethodDelete, Path: path}, nil)
+					_, err = s.direct().JSON(ctx, link.Request{Method: http.MethodDelete, Path: path}, nil)
 				}
 				if err != nil {
 					return nil, nil, fmt.Errorf("deleted %q; failed on %s: %w", in.Paths[:i], p, err)
@@ -168,7 +170,7 @@ func (s *Server) addFileTools() {
 		}
 		if then == "print" {
 			// Check before a possibly long upload, not after.
-			if err := s.readyToStart(ctx, t); err != nil {
+			if err := s.readyToStart(ctx, t, in.PlateClear); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -227,7 +229,7 @@ func (s *Server) addFileTools() {
 		if err != nil {
 			return nil, nil, err
 		}
-		path, n, err := s.link.Download(ctx, in.Path, in.LocalPath, in.Overwrite)
+		path, n, err := s.direct().Download(ctx, in.Path, in.LocalPath, in.Overwrite)
 		if errors.Is(err, link.ErrExists) {
 			return nil, nil, fmt.Errorf("%s already exists; set overwrite to replace it", path)
 		}
@@ -247,7 +249,7 @@ func (s *Server) addFileTools() {
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := s.readyToStart(ctx, t); err != nil {
+		if err := s.readyToStart(ctx, t, in.PlateClear); err != nil {
 			return nil, nil, err
 		}
 		if t.direct {
@@ -255,7 +257,7 @@ func (s *Server) addFileTools() {
 			if err != nil {
 				return nil, nil, err
 			}
-			if _, err := s.link.JSON(ctx, link.Request{Method: http.MethodPost, Path: path}, nil); err != nil {
+			if _, err := s.direct().JSON(ctx, link.Request{Method: http.MethodPost, Path: path}, nil); err != nil {
 				return nil, nil, err
 			}
 			out := startReport(s.startedState(ctx, t))
@@ -353,7 +355,7 @@ func (s *Server) addFileTools() {
 		}
 		if t.direct {
 			var tr json.RawMessage
-			found, err := s.link.Get(ctx, "/api/v1/transfer", &tr)
+			found, err := s.direct().Get(ctx, "/api/v1/transfer", &tr)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -491,7 +493,7 @@ func (s *Server) uploadDirect(ctx context.Context, localPath, destination, filen
 		}
 		return "?0"
 	}
-	_, err = s.link.JSON(ctx, link.Request{
+	_, err = s.direct().JSON(ctx, link.Request{
 		Method:        http.MethodPut,
 		Path:          path,
 		Body:          func() (io.ReadCloser, error) { return os.Open(localPath) },

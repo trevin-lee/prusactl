@@ -26,7 +26,7 @@ func (s *Server) printerState(ctx context.Context, t target) (string, error) {
 				State string `json:"state"`
 			} `json:"printer"`
 		}
-		if _, err := s.link.Get(ctx, "/api/v1/status", &st); err != nil {
+		if _, err := s.direct().Get(ctx, "/api/v1/status", &st); err != nil {
 			return "", err
 		}
 		return st.Printer.State, nil
@@ -38,9 +38,12 @@ func (s *Server) printerState(ctx context.Context, t target) (string, error) {
 	return stateOf(p), nil
 }
 
-// readyToStart refuses a print the printer can't take, before anything is
-// uploaded or queued.
-func (s *Server) readyToStart(ctx context.Context, t target) error {
+// readyToStart refuses a print or G-code the printer can't take, before
+// anything is uploaded or queued. After a finished or stopped print the part
+// may still be on the plate, where a new print or a homing move would hit it,
+// so those states also need plateClear: an explicit statement that someone
+// looked.
+func (s *Server) readyToStart(ctx context.Context, t target, plateClear bool) error {
 	state, err := s.printerState(ctx, t)
 	if err != nil {
 		return fmt.Errorf("checking %s before printing: %w", t.name, err)
@@ -53,9 +56,13 @@ func (s *Server) readyToStart(ctx context.Context, t target) error {
 		case "ATTENTION":
 			hint = "; a question is waiting on its screen (get_printer shows it, respond_to_dialog answers it)"
 		case "PRINTING", "PAUSED", "BUSY":
-			hint = "; wait for it to finish, or use then=queue"
+			hint = "; wait for it to finish, or add the file to the Prusa Connect queue"
 		}
-		return fmt.Errorf("%s is %s, so it can't start a print%s", t.name, state, hint)
+		return fmt.Errorf("%s is %s, so it can't take a new job%s", t.name, state, hint)
+	}
+	if (state == "FINISHED" || state == "STOPPED") && !plateClear {
+		return fmt.Errorf("%s is %s, so the last print may still be on the plate. Look first (get_camera_snapshot, "+
+			"or ask the user), then call again with plate_clear=true", t.name, state)
 	}
 	return nil
 }

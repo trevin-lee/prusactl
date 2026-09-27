@@ -145,7 +145,8 @@ type controlPrintInput struct {
 
 type gcodeInput struct {
 	printerRef
-	Gcode string `json:"gcode" jsonschema:"G-code lines to run, e.g. \"G28\\nM104 S215\""`
+	Gcode      string `json:"gcode" jsonschema:"G-code lines to run, e.g. \"G28\\nM104 S215\""`
+	PlateClear bool   `json:"plate_clear,omitempty" jsonschema:"set only after confirming (camera or a person) that nothing is left on the plate; required when the printer is FINISHED or STOPPED, since the last print may still be there"`
 }
 
 // macroPath is where run_gcode puts its one-off job.
@@ -248,7 +249,7 @@ func (s *Server) addControlTools() {
 				ID    int64  `json:"id"`
 				State string `json:"state"`
 			}
-			found, err := s.link.Get(ctx, "/api/v1/job", &job)
+			found, err := s.direct().Get(ctx, "/api/v1/job", &job)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -273,7 +274,7 @@ func (s *Server) addControlTools() {
 			default:
 				return nil, nil, fmt.Errorf("action must be pause, resume, continue, or stop (got %q)", in.Action)
 			}
-			if _, err := s.link.JSON(ctx, req, nil); err != nil {
+			if _, err := s.direct().JSON(ctx, req, nil); err != nil {
 				return nil, nil, err
 			}
 			return jsonResult(withVia(t, map[string]any{"action": action, "job_id": job.ID, "state_before": job.State}))
@@ -307,18 +308,8 @@ func (s *Server) addControlTools() {
 		if err != nil {
 			return nil, nil, fmt.Errorf("run_gcode needs the direct connection: %w", err)
 		}
-		var st struct {
-			Printer struct {
-				State string `json:"state"`
-			} `json:"printer"`
-		}
-		if _, err := s.link.Get(ctx, "/api/v1/status", &st); err != nil {
+		if err := s.readyToStart(ctx, t, in.PlateClear); err != nil {
 			return nil, nil, err
-		}
-		switch st.Printer.State {
-		case "IDLE", "READY", "FINISHED", "STOPPED":
-		default:
-			return nil, nil, fmt.Errorf("%s is %s; G-code can only run while it is idle", t.name, st.Printer.State)
 		}
 		// Without this header line Buddy firmware asks, on the printer's screen, whether a
 		// file not sliced with input shaping should run, and waits there. Slicer output
@@ -328,7 +319,7 @@ func (s *Server) addControlTools() {
 		if err != nil {
 			return nil, nil, err
 		}
-		_, err = s.link.JSON(ctx, link.Request{
+		_, err = s.direct().JSON(ctx, link.Request{
 			Method:        http.MethodPut,
 			Path:          path,
 			Body:          func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil },

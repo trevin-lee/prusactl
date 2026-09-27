@@ -32,14 +32,23 @@ func fakeStatus(t *testing.T, states ...string) *Server {
 func TestReadyToStartRefusesABusyPrinter(t *testing.T) {
 	tg := target{direct: true, name: "Core One"}
 	for _, st := range []string{"PRINTING", "PAUSED", "BUSY", "ATTENTION"} {
-		err := fakeStatus(t, st).readyToStart(context.Background(), tg)
+		err := fakeStatus(t, st).readyToStart(context.Background(), tg, true)
 		if err == nil || !strings.Contains(err.Error(), st) {
 			t.Errorf("%s: err = %v, want a refusal naming the state", st, err)
 		}
 	}
-	for _, st := range []string{"IDLE", "READY", "FINISHED", "STOPPED"} {
-		if err := fakeStatus(t, st).readyToStart(context.Background(), tg); err != nil {
+	for _, st := range []string{"IDLE", "READY"} {
+		if err := fakeStatus(t, st).readyToStart(context.Background(), tg, false); err != nil {
 			t.Errorf("%s: %v", st, err)
+		}
+	}
+	for _, st := range []string{"FINISHED", "STOPPED"} {
+		err := fakeStatus(t, st).readyToStart(context.Background(), tg, false)
+		if err == nil || !strings.Contains(err.Error(), "plate_clear") {
+			t.Errorf("%s without plate_clear: err = %v, want a request to check the plate", st, err)
+		}
+		if err := fakeStatus(t, st).readyToStart(context.Background(), tg, true); err != nil {
+			t.Errorf("%s with plate_clear: %v", st, err)
 		}
 	}
 }
