@@ -253,13 +253,17 @@ func status(ctx context.Context, srv *server.Server, lc *link.Client) error {
 
 	if cloud["signed_in"] == true {
 		who := "signed in"
-		var me map[string]any
-		if raw, ok := cloud["user"].(json.RawMessage); ok && json.Unmarshal(raw, &me) == nil {
-			for _, k := range []string{"public_name", "username", "email"} {
-				if v, ok := me[k].(string); ok && v != "" {
-					who = "signed in as " + v
-					break
-				}
+		var me struct {
+			User struct {
+				PublicName string `json:"public_name"`
+				FirstName  string `json:"first_name"`
+				LastName   string `json:"last_name"`
+			} `json:"user"`
+		}
+		if raw, ok := cloud["user"].(json.RawMessage); ok && json.Unmarshal(raw, &me) == nil && me.User.PublicName != "" {
+			who = "signed in as " + me.User.PublicName
+			if full := strings.TrimSpace(me.User.FirstName + " " + me.User.LastName); full != "" {
+				who += " (" + full + ")"
 			}
 		}
 		if e, ok := cloud["error"]; ok {
