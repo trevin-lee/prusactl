@@ -31,6 +31,10 @@ func (c Config) PasswordLogin(ctx context.Context, prompt Prompter) (*Token, err
 	if err != nil {
 		return nil, err
 	}
+	account, err := url.Parse(c.AccountURL)
+	if err != nil {
+		return nil, err
+	}
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
 		Jar:     jar,
@@ -38,6 +42,11 @@ func (c Config) PasswordLogin(ctx context.Context, prompt Prompter) (*Token, err
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if strings.HasPrefix(req.URL.String(), c.RedirectURI) || len(via) > 10 {
 				return http.ErrUseLastResponse
+			}
+			// The login pages never leave Prusa Account; don't follow anything
+			// that does, so no other site can serve a form to post to.
+			if !sameOrigin(req.URL, account) {
+				return fmt.Errorf("Prusa Account redirected sign-in to %s, which isn't %s; stopping", req.URL.Host, account.Host)
 			}
 			return nil
 		},
@@ -99,7 +108,7 @@ func (c Config) PasswordLogin(ctx context.Context, prompt Prompter) (*Token, err
 			values.Set("allow", "Authorize")
 			sentConsent = true
 		}
-		if resp, err = postForm(ctx, client, page.url, form.action, values); err != nil {
+		if resp, err = postForm(ctx, client, account, page.url, form.action, values); err != nil {
 			return nil, err
 		}
 	}
@@ -119,10 +128,20 @@ func get(ctx context.Context, client *http.Client, u string) (*http.Response, er
 	return resp, nil
 }
 
-func postForm(ctx context.Context, client *http.Client, page *url.URL, action string, values url.Values) (*http.Response, error) {
+// sameOrigin reports whether u has a's scheme and host.
+func sameOrigin(u, a *url.URL) bool {
+	return strings.EqualFold(u.Scheme, a.Scheme) && strings.EqualFold(u.Host, a.Host)
+}
+
+// postForm submits a login form. The password and 2FA code only ever go to
+// Prusa Account (account), whatever the page's form action says.
+func postForm(ctx context.Context, client *http.Client, account, page *url.URL, action string, values url.Values) (*http.Response, error) {
 	target, err := page.Parse(action)
 	if err != nil {
 		return nil, err
+	}
+	if !sameOrigin(target, account) {
+		return nil, fmt.Errorf("refusing to send sign-in details to %s: only %s is trusted", target.Host, account.Host)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), strings.NewReader(values.Encode()))
 	if err != nil {

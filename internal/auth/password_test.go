@@ -148,3 +148,18 @@ func TestPasswordLoginReportsWrongPassword(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestPasswordNeverPostedOffPrusaAccount(t *testing.T) {
+	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("sign-in details reached another host: %s %s", r.Method, r.URL)
+	}))
+	defer evil.Close()
+	account, _ := url.Parse("https://account.prusa3d.com")
+	page, _ := url.Parse("https://account.prusa3d.com/login/")
+	for _, action := range []string{evil.URL + "/steal", "http://account.prusa3d.com/login/", "//evil.example/login"} {
+		_, err := postForm(context.Background(), evil.Client(), account, page, action, url.Values{"password": {"hunter2"}})
+		if err == nil || !strings.Contains(err.Error(), "refusing") {
+			t.Errorf("action %q: err = %v, want a refusal", action, err)
+		}
+	}
+}
