@@ -189,7 +189,11 @@ func (s *Server) addControlTools() {
 			cmds = kept
 		}
 		sort.Slice(cmds, func(i, j int) bool { return cmds[i].Command < cmds[j].Command })
-		return jsonResult(map[string]any{"printer": p.Name, "state": state, "commands": cmds})
+		out := map[string]any{"printer": p.Name, "state": state, "commands": cmds}
+		if state == "OFFLINE" {
+			out["note"] = "the printer is offline in Prusa Connect, so no command can reach it through Connect right now"
+		}
+		return jsonResult(out)
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{

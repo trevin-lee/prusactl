@@ -171,9 +171,20 @@ func (s *Server) route(ctx context.Context, ref printerRef) (target, error) {
 		case ref.Printer == "" || info.matches(ref.Printer, s.link.Config.Host):
 			return target{direct: true, name: displayName(info, s.link.Config.Host)}, nil
 		case s.session.SignedIn():
-			// Maybe it's the Connect name of the same printer.
-			if p, cerr := s.resolvePrinter(ctx, ref.Printer); cerr == nil && p.SN != "" && strings.EqualFold(p.SN, info.Serial) {
-				return target{direct: true, name: p.Name}, nil
+			// Maybe it's the Connect name of the same printer. The printer
+			// list omits serial numbers, so read the record.
+			if p, cerr := s.resolvePrinter(ctx, ref.Printer); cerr == nil {
+				if p.SN == "" {
+					var rec struct {
+						SN string `json:"sn"`
+					}
+					if s.connect.Get(ctx, printerPath(p.UUID), nil, &rec) == nil {
+						p.SN = rec.SN
+					}
+				}
+				if p.SN != "" && strings.EqualFold(p.SN, info.Serial) {
+					return target{direct: true, name: p.Name}, nil
+				}
 			}
 			directErr = fmt.Errorf("the directly connected printer is %q, not %q", displayName(info, s.link.Config.Host), ref.Printer)
 		default:
