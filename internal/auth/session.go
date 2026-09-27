@@ -68,21 +68,38 @@ func (s *Session) AccessToken(ctx context.Context) (string, error) {
 		s.tok = stored
 		return stored.AccessToken, nil
 	}
-	fresh, err := s.Config.Refresh(ctx, stored.RefreshToken)
-	if err != nil {
-		var oe *OAuthError
-		if errors.As(err, &oe) && oe.Revoked() {
-			_ = s.Store.Clear()
-			s.tok = nil
-			return "", fmt.Errorf("%w (the saved session was rejected: %v)", ErrNotLoggedIn, err)
+	for attempt := 0; ; attempt++ {
+		fresh, err := s.Config.Refresh(ctx, stored.RefreshToken)
+		if err == nil {
+			if err := s.Store.Save(fresh); err != nil {
+				return "", fmt.Errorf("saving refreshed session: %w", err)
+			}
+			s.tok = fresh
+			return fresh.AccessToken, nil
 		}
-		return "", err
+		var oe *OAuthError
+		if !errors.As(err, &oe) || !oe.Revoked() {
+			return "", err
+		}
+		// The token was rejected. If the stored session changed meanwhile (a
+		// new `prusactl login`, or a process that didn't take the lock), use
+		// that one; only clear a session that is still the rejected one, or a
+		// fresh login would be thrown away.
+		again, lerr := s.Store.Load()
+		if lerr == nil && again.RefreshToken != stored.RefreshToken && attempt == 0 {
+			if again.Valid(refreshMargin) {
+				s.tok = again
+				return again.AccessToken, nil
+			}
+			stored = again
+			continue
+		}
+		if lerr == nil && again.RefreshToken == stored.RefreshToken {
+			_ = s.Store.Clear()
+		}
+		s.tok = nil
+		return "", fmt.Errorf("%w (the saved session was rejected: %v)", ErrNotLoggedIn, err)
 	}
-	if err := s.Store.Save(fresh); err != nil {
-		return "", fmt.Errorf("saving refreshed session: %w", err)
-	}
-	s.tok = fresh
-	return fresh.AccessToken, nil
 }
 
 // Invalidate forgets an access token the server rejected, so the next call to
@@ -93,7 +110,14 @@ func (s *Session) Invalidate(access string) {
 	if s.tok != nil && s.tok.AccessToken == access {
 		s.tok.Expiry = time.Time{}
 	}
-	// Also drop it from the shared cache if it is still there.
+	// Also drop it from the shared cache if it is still there. Hold the refresh
+	// lock so this load-and-save can't write back a refresh token another
+	// process has just rotated.
+	unlock, err := lockRefresh()
+	if err != nil {
+		return
+	}
+	defer unlock()
 	if stored, err := s.Store.Load(); err == nil && stored.AccessToken == access {
 		stored.AccessToken, stored.Expiry = "", time.Time{}
 		_ = s.Store.Save(stored)
@@ -112,8 +136,13 @@ func (s *Session) Login(ctx context.Context, prompt Prompter) (*Token, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := lockRefresh()
+	if err != nil {
+		return nil, fmt.Errorf("locking the saved session: %w", err)
+	}
+	defer unlock()
 	if err := s.Store.Save(tok); err != nil {
-		return nil, fmt.Errorf("saving session to the keychain: %w", err)
+		return nil, fmt.Errorf("saving the session: %w", err)
 	}
 	s.tok = tok
 	return tok, nil
@@ -124,6 +153,11 @@ func (s *Session) Logout() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tok = nil
+	unlock, err := lockRefresh()
+	if err != nil {
+		return fmt.Errorf("locking the saved session: %w", err)
+	}
+	defer unlock()
 	return s.Store.Clear()
 }
 

@@ -147,3 +147,33 @@ func TestSessionRefreshesAndRotates(t *testing.T) {
 		t.Fatal("test hit a real server")
 	}
 }
+
+func TestRejectedRefreshKeepsANewerSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store := &memStore{tok: &Token{RefreshToken: "old"}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		switch r.Form.Get("refresh_token") {
+		case "old":
+			// Meanwhile the user ran `prusactl login` in another terminal.
+			_ = store.Save(&Token{RefreshToken: "new"})
+			w.WriteHeader(400)
+			_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+		case "new":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": fakeJWT(time.Now().Add(time.Hour)), "refresh_token": "newer", "expires_in": 3600,
+			})
+		default:
+			t.Errorf("unexpected refresh token %q", r.Form.Get("refresh_token"))
+		}
+	}))
+	defer srv.Close()
+
+	s := &Session{Config: Config{AccountURL: srv.URL, ClientID: "cid", HTTP: srv.Client()}, Store: store}
+	if _, err := s.AccessToken(context.Background()); err != nil {
+		t.Fatalf("the new session should be used: %v", err)
+	}
+	if stored, err := store.Load(); err != nil || stored.RefreshToken != "newer" {
+		t.Fatalf("stored session = %+v, %v; the new login was lost", stored, err)
+	}
+}
