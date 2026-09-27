@@ -114,3 +114,16 @@ func TestNormalizeHost(t *testing.T) {
 		}
 	}
 }
+
+func TestEnvIgnoresUnfilledPlaceholders(t *testing.T) {
+	t.Setenv("PRUSACTL_HOST", "${user_config.printer_address}")
+	t.Setenv("PRUSACTL_CONFIG", t.TempDir()+"/none.json")
+	if _, err := LoadConfig(); err != ErrNotConfigured {
+		t.Fatalf("placeholder was used as an address: %v", err)
+	}
+	t.Setenv("PRUSACTL_HOST", " 10.0.0.5 ")
+	cfg, err := LoadConfig()
+	if err != nil || cfg.Host != "http://10.0.0.5" || cfg.User != "maker" {
+		t.Fatalf("cfg=%+v err=%v", cfg, err)
+	}
+}

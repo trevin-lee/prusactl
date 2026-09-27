@@ -51,6 +51,16 @@ func NormalizeHost(h string) (string, error) {
 	return u.Scheme + "://" + u.Host, nil
 }
 
+// env reads an override, ignoring blanks and unfilled "${...}" placeholders
+// (an MCP bundle passes those through when an optional setting is left empty).
+func env(name string) string {
+	v := strings.TrimSpace(os.Getenv(name))
+	if strings.HasPrefix(v, "${") {
+		return ""
+	}
+	return v
+}
+
 func configPath() (string, error) {
 	if p := os.Getenv("PRUSACTL_CONFIG"); p != "" {
 		return p, nil
@@ -84,13 +94,13 @@ func LoadConfig() (Config, error) {
 			cfg = *f.Printer
 		}
 	}
-	if v := os.Getenv("PRUSACTL_HOST"); v != "" {
+	if v := env("PRUSACTL_HOST"); v != "" {
 		cfg.Host = v
 	}
-	if v := os.Getenv("PRUSACTL_USER"); v != "" {
+	if v := env("PRUSACTL_USER"); v != "" {
 		cfg.User = v
 	}
-	if v := os.Getenv("PRUSACTL_AUTH"); v != "" {
+	if v := env("PRUSACTL_AUTH"); v != "" {
 		cfg.Auth = v
 	}
 	if cfg.Host == "" {
@@ -147,11 +157,11 @@ func (cfg Config) secretAccount() string {
 // Secret returns the printer password or API key: PRUSACTL_PASSWORD /
 // PRUSACTL_API_KEY if set, else the keychain.
 func (cfg Config) Secret() (string, error) {
-	env := "PRUSACTL_PASSWORD"
+	name := "PRUSACTL_PASSWORD"
 	if cfg.Auth == AuthAPIKey {
-		env = "PRUSACTL_API_KEY"
+		name = "PRUSACTL_API_KEY"
 	}
-	if v := os.Getenv(env); v != "" {
+	if v := env(name); v != "" {
 		return v, nil
 	}
 	s, err := keyring.Get("prusactl", cfg.secretAccount())
