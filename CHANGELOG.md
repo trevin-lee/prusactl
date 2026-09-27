@@ -14,5 +14,11 @@ First release.
   dialogs, print queue, history, events, telemetry, and firmware commands.
 - MCP server (`prusactl mcp`) whose tools pick the direct route when the
   printer answers and fall back to Connect.
+- Credentials stay out of transcripts: API keys, tokens and passwords are
+  masked in every tool result, error, and `prusactl api` response (`--raw`
+  shows them).
+- Runs on headless Linux such as a Raspberry Pi: with no system keychain,
+  credentials go in a private `secrets.json` (`PRUSACTL_KEYRING=file` forces
+  it).
 - Distributed as binaries, a Homebrew cask, an MCP bundle, and an MCP Registry
   listing.
