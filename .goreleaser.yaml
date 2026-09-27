@@ -1,0 +1,80 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: prusactl
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: prusactl
+    main: ./cmd/prusactl
+    binary: prusactl
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64, arm]
+    goarm: ["7"]
+    ignore:
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+universal_binaries:
+  - id: prusactl
+    replace: true
+
+archives:
+  - id: prusactl
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ if eq .Arch "all" }}universal{{ else }}{{ .Arch }}{{ end }}{{ if .Arm }}v{{ .Arm }}{{ end }}
+    files: [README.md, LICENSE]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:", "^ci:"]
+
+release:
+  footer: |
+    **Install:** `brew install trevin-lee/tap/prusactl`, `go install github.com/trevin-lee/prusactl/cmd/prusactl@{{ .Tag }}`, or download a binary below.
+    `prusactl.mcpb` is a one-click MCP bundle for clients that support MCPB.
+
+homebrew_casks:
+  - name: prusactl
+    binaries: [prusactl]
+    homepage: https://github.com/trevin-lee/prusactl
+    description: Run a Prusa 3D printer from the terminal or an AI agent (CLI + MCP server)
+    license: MIT
+    repository:
+      owner: trevin-lee
+      name: homebrew-tap
+      branch: main
+      git:
+        url: git@github.com:trevin-lee/homebrew-tap.git
+        private_key: "{{ .Env.TAP_DEPLOY_KEY }}"
+    commit_author:
+      name: prusactl release bot
+      email: 134039857+trevin-lee@users.noreply.github.com
+    commit_msg_template: "feat: prusactl {{ .Tag }}"
+    hooks:
+      post:
+        # The binaries aren't notarized; clear the quarantine flag so macOS runs them.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/prusactl"]
+          end

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.trevin-lee/prusactl",
+  "title": "prusactl",
+  "description": "Run a Prusa 3D printer: status, camera, files, printing, G-code, over PrusaLink or Prusa Connect.",
+  "repository": { "url": "https://github.com/trevin-lee/prusactl", "source": "github" },
+  "version": "0.0.0",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/trevin-lee/prusactl/releases/download/v0.0.0/prusactl.mcpb",
+      "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}

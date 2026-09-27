@@ -173,6 +173,10 @@ go test ./...
 go vet ./...
 ```
 
+Releases are cut by pushing a `vX.Y.Z` tag. CI builds the binaries, updates the
+Homebrew tap, attaches the MCP bundle, and publishes to the MCP Registry. See
+[CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 [MIT](LICENSE).
