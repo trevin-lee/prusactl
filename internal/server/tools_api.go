@@ -59,8 +59,8 @@ func (s *Server) addAPITool() {
 		}
 		var resp *http.Response
 		if direct {
-			if s.link == nil {
-				return nil, nil, s.linkErr
+			if s.direct() == nil {
+				return nil, nil, s.directErr()
 			}
 			req := link.Request{Method: method, Path: u.Path, Query: q}
 			if in.Body != nil {
@@ -71,7 +71,7 @@ func (s *Server) addAPITool() {
 				req.Body = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(b)), nil }
 				req.ContentLength, req.ContentType = int64(len(b)), "application/json"
 			}
-			resp, err = s.link.Do(ctx, req)
+			resp, err = s.direct().Do(ctx, req)
 		} else {
 			req := connect.Request{Method: method, Path: u.Path, Query: q}
 			if in.Body != nil {

@@ -54,13 +54,13 @@ type telemetryInput struct {
 // directStatus gathers PrusaLink's view of the printer.
 func (s *Server) directStatus(ctx context.Context) (map[string]any, error) {
 	var status, info, job json.RawMessage
-	if _, err := s.link.Get(ctx, "/api/v1/status", &status); err != nil {
+	if _, err := s.direct().Get(ctx, "/api/v1/status", &status); err != nil {
 		return nil, err
 	}
-	if _, err := s.link.Get(ctx, "/api/v1/info", &info); err != nil {
+	if _, err := s.direct().Get(ctx, "/api/v1/info", &info); err != nil {
 		return nil, err
 	}
-	hasJob, err := s.link.Get(ctx, "/api/v1/job", &job)
+	hasJob, err := s.direct().Get(ctx, "/api/v1/job", &job)
 	if err != nil {
 		return nil, err
 	}
@@ -80,12 +80,12 @@ func (s *Server) addPrinterTools() {
 		Annotations: readOnly("List printers"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 		out := map[string]any{}
-		if s.link != nil {
-			d := map[string]any{"host": s.link.Config.Host}
+		if s.direct() != nil {
+			d := map[string]any{"host": s.direct().Config.Host}
 			if info, err := s.probeLink(ctx); err != nil {
 				d["reachable"], d["error"] = false, err.Error()
 			} else {
-				d["reachable"], d["name"], d["serial"] = true, displayName(info, s.link.Config.Host), info.Serial
+				d["reachable"], d["name"], d["serial"] = true, displayName(info, s.direct().Config.Host), info.Serial
 			}
 			out["direct"] = d
 		}

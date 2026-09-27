@@ -52,6 +52,11 @@ func Open() (*Client, error) {
 	return New(cfg, secret), nil
 }
 
+// Same reports whether o talks to the same printer with the same credentials.
+func (c *Client) Same(o *Client) bool {
+	return c != nil && o != nil && c.Config == o.Config && c.secret == o.secret
+}
+
 // APIError is a non-2xx response.
 type APIError struct {
 	Method, Path string

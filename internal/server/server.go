@@ -34,8 +34,13 @@ Setup happens in a terminal, never through these tools: "prusactl setup" for the
 type Server struct {
 	session *auth.Session
 	connect *connect.Client
-	link    *link.Client // nil when direct access isn't set up
-	linkErr error        // why link is nil
+	// The direct route. It is re-read from the saved setup on each probe, so
+	// a `prusactl setup` or `setup --forget` run while the server is up takes
+	// effect without restarting the MCP client.
+	linkMu   sync.Mutex
+	link     *link.Client // nil when direct access isn't set up
+	linkErr  error        // why link is nil
+	openLink func() (*link.Client, error)
 
 	mcp *mcp.Server
 
@@ -48,7 +53,7 @@ type Server struct {
 // New builds the MCP server and registers every tool. lc may be nil, with
 // lcErr explaining why.
 func New(session *auth.Session, cc *connect.Client, lc *link.Client, lcErr error, version string) *Server {
-	s := &Server{session: session, connect: cc, link: lc, linkErr: lcErr}
+	s := &Server{session: session, connect: cc, link: lc, linkErr: lcErr, openLink: link.Open}
 	s.mcp = mcp.NewServer(
 		&mcp.Implementation{Name: "prusactl", Title: "Prusa printer", Version: version},
 		&mcp.ServerOptions{Instructions: instructions},
@@ -111,9 +116,6 @@ type linkInfo struct {
 // probeLink checks whether the printer answers directly, caching the answer
 // briefly so a burst of tool calls doesn't wait on an unreachable printer.
 func (s *Server) probeLink(ctx context.Context) (*linkInfo, error) {
-	if s.link == nil {
-		return nil, s.linkErr
-	}
 	s.probeMu.Lock()
 	defer s.probeMu.Unlock()
 	ttl := 30 * time.Second
@@ -123,10 +125,22 @@ func (s *Server) probeLink(ctx context.Context) (*linkInfo, error) {
 	if !s.probed.IsZero() && time.Since(s.probed) < ttl {
 		return s.info, s.infoErr
 	}
+	if s.reloadLink() {
+		s.info, s.infoErr = nil, nil
+	}
+	lc, lerr := s.lc()
+	if lc == nil {
+		return nil, lerr
+	}
 	pctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	var info linkInfo
-	_, err := s.link.Get(pctx, "/api/v1/info", &info)
+	_, err := lc.Get(pctx, "/api/v1/info", &info)
+	if ctx.Err() != nil {
+		// The caller gave up; that says nothing about the printer, so don't
+		// remember it as unreachable.
+		return nil, ctx.Err()
+	}
 	s.probed = time.Now()
 	if err != nil {
 		s.info, s.infoErr = nil, err
@@ -134,6 +148,51 @@ func (s *Server) probeLink(ctx context.Context) (*linkInfo, error) {
 		s.info, s.infoErr = &info, nil
 	}
 	return s.info, s.infoErr
+}
+
+// lc returns the direct-route client, or nil and why there is none.
+func (s *Server) lc() (*link.Client, error) {
+	s.linkMu.Lock()
+	defer s.linkMu.Unlock()
+	return s.link, s.linkErr
+}
+
+// direct returns the direct-route client, or nil when it isn't set up.
+func (s *Server) direct() *link.Client {
+	lc, _ := s.lc()
+	return lc
+}
+
+// directErr says why there is no direct-route client.
+func (s *Server) directErr() error {
+	_, err := s.lc()
+	return err
+}
+
+// reloadLink re-reads the saved direct setup and reports whether it changed.
+func (s *Server) reloadLink() bool {
+	if s.openLink == nil {
+		return false
+	}
+	fresh, err := s.openLink()
+	s.linkMu.Lock()
+	defer s.linkMu.Unlock()
+	switch {
+	case err != nil && s.link == nil:
+		s.linkErr = err
+		return false
+	case err != nil:
+		if errors.Is(err, link.ErrNotConfigured) {
+			// `prusactl setup --forget`.
+			s.link, s.linkErr = nil, err
+			return true
+		}
+		return false // e.g. the keychain is briefly unavailable: keep what works
+	case fresh.Same(s.link):
+		return false
+	}
+	s.link, s.linkErr = fresh, nil
+	return true
 }
 
 // target is where a tool call goes.
@@ -171,11 +230,14 @@ func (s *Server) route(ctx context.Context, ref printerRef) (target, error) {
 	var directErr error
 	if via != "connect" {
 		info, err := s.probeLink(ctx)
+		if ctx.Err() != nil {
+			return target{}, ctx.Err()
+		}
 		switch {
 		case err != nil:
 			directErr = err
-		case ref.Printer == "" || info.matches(ref.Printer, s.link.Config.Host):
-			return target{direct: true, name: displayName(info, s.link.Config.Host)}, nil
+		case ref.Printer == "" || info.matches(ref.Printer, s.direct().Config.Host):
+			return target{direct: true, name: displayName(info, s.direct().Config.Host)}, nil
 		case s.session.SignedIn():
 			// Maybe it's the Connect name of the same printer. The printer
 			// list omits serial numbers, so read the record.
@@ -192,15 +254,18 @@ func (s *Server) route(ctx context.Context, ref printerRef) (target, error) {
 					return target{direct: true, name: p.Name}, nil
 				}
 			}
-			directErr = fmt.Errorf("the directly connected printer is %q, not %q", displayName(info, s.link.Config.Host), ref.Printer)
+			directErr = fmt.Errorf("the directly connected printer is %q, not %q", displayName(info, s.direct().Config.Host), ref.Printer)
 		default:
-			directErr = fmt.Errorf("the directly connected printer is %q, not %q", displayName(info, s.link.Config.Host), ref.Printer)
+			directErr = fmt.Errorf("the directly connected printer is %q, not %q", displayName(info, s.direct().Config.Host), ref.Printer)
 		}
 		if via == "direct" {
 			return target{}, directErr
 		}
 	}
 	if !s.session.SignedIn() {
+		if via == "connect" {
+			return target{}, errors.New("this needs Prusa Connect, which isn't signed in: ask the user to run `prusactl login` in a terminal")
+		}
 		if errors.Is(directErr, link.ErrNotConfigured) || directErr == nil {
 			return target{}, errors.New("no way to reach a printer yet: run `prusactl setup` (direct, on your network) or `prusactl login` (Prusa Connect) in a terminal")
 		}

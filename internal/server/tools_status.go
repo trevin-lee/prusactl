@@ -12,19 +12,19 @@ import (
 
 // Status reports how the printer can be reached, for the CLI and MCP alike.
 func (s *Server) Status(ctx context.Context) map[string]any {
-	direct := map[string]any{"configured": s.link != nil}
+	direct := map[string]any{"configured": s.direct() != nil}
 	switch {
-	case s.link != nil:
-		direct["host"] = s.link.Config.Host
+	case s.direct() != nil:
+		direct["host"] = s.direct().Config.Host
 		if info, err := s.probeLink(ctx); err != nil {
 			direct["reachable"], direct["error"] = false, err.Error()
 		} else {
 			direct["reachable"], direct["printer"] = true, info
 		}
-	case errors.Is(s.linkErr, link.ErrNotConfigured):
+	case errors.Is(s.directErr(), link.ErrNotConfigured):
 		direct["setup"] = "run `prusactl setup` in a terminal"
-	case s.linkErr != nil:
-		direct["error"] = s.linkErr.Error()
+	case s.directErr() != nil:
+		direct["error"] = s.directErr().Error()
 	}
 
 	cloud := map[string]any{"signed_in": false}
