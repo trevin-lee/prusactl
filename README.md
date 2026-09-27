@@ -96,7 +96,9 @@ the OAuth + PKCE flow of the Connect web app.
 
 - **Your password** is sent only to account.prusa3d.com and is never stored.
 - **Where tokens are kept:** the OS keychain (macOS Keychain, Secret Service, or
-  Windows Credential Manager), under the service `prusactl`.
+  Windows Credential Manager), under the service `prusactl`. A machine without
+  one, such as a headless Raspberry Pi, gets `secrets.json` in prusactl's config
+  directory instead, readable only by you; `PRUSACTL_KEYRING=file` forces that.
 - **Staying signed in:** tokens refresh on their own. Prusa rotates refresh
   tokens, so refreshes are coordinated between processes. Several agents can
   share one session without signing each other out.
@@ -168,6 +170,7 @@ to an agent. `--raw` shows them.
 | --- | --- |
 | `PRUSACTL_HOST`, `PRUSACTL_USER`, `PRUSACTL_AUTH` | Override the saved printer address, username, or `digest`/`api-key` |
 | `PRUSACTL_PASSWORD`, `PRUSACTL_API_KEY` | Supply the printer secret instead of the keychain |
+| `PRUSACTL_KEYRING=file` | Keep credentials in `secrets.json` (mode 0600) instead of the OS keychain |
 | `PRUSACTL_CONFIG` | Alternate config file (default: `prusactl/config.json` in the OS config dir) |
 | `PRUSA_CONNECT_URL`, `PRUSA_ACCOUNT_URL` | Connect and Prusa Account origins |
 | `PRUSA_CLIENT_ID`, `PRUSA_REDIRECT_URI` | The OAuth client (default: the Connect web app's) |

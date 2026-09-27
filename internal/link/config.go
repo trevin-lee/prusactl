@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zalando/go-keyring"
+	"github.com/trevin-lee/prusactl/internal/secret"
 
 	"github.com/trevin-lee/prusactl/internal/appdir"
 )
@@ -141,7 +141,7 @@ func RemoveConfig(cfg Config) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		errs = append(errs, err)
 	}
-	if err := keyring.Delete("prusactl", cfg.secretAccount()); err != nil && !errors.Is(err, keyring.ErrNotFound) {
+	if err := secret.Delete(cfg.secretAccount()); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
@@ -155,7 +155,7 @@ func (cfg Config) secretAccount() string {
 }
 
 // Secret returns the printer password or API key: PRUSACTL_PASSWORD /
-// PRUSACTL_API_KEY if set, else the keychain.
+// PRUSACTL_API_KEY if set, else the stored one.
 func (cfg Config) Secret() (string, error) {
 	name := "PRUSACTL_PASSWORD"
 	if cfg.Auth == AuthAPIKey {
@@ -164,14 +164,14 @@ func (cfg Config) Secret() (string, error) {
 	if v := env(name); v != "" {
 		return v, nil
 	}
-	s, err := keyring.Get("prusactl", cfg.secretAccount())
-	if errors.Is(err, keyring.ErrNotFound) {
+	s, err := secret.Get(cfg.secretAccount())
+	if errors.Is(err, secret.ErrNotFound) {
 		return "", fmt.Errorf("no saved password for %s: run `prusactl setup` again", cfg.Host)
 	}
 	return s, err
 }
 
-// SaveSecret stores the printer password or API key in the keychain.
-func (cfg Config) SaveSecret(secret string) error {
-	return keyring.Set("prusactl", cfg.secretAccount(), secret)
+// SaveSecret stores the printer password or API key (see package secret).
+func (cfg Config) SaveSecret(value string) error {
+	return secret.Set(cfg.secretAccount(), value)
 }
