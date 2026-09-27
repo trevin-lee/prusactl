@@ -156,7 +156,9 @@ to an agent. `--raw` shows them.
 
 - **It has no hands.** It can't clear the build plate, swap a spool, or fix a
   clog. The tool descriptions tell the agent to check the printer (and the camera,
-  if any) before starting a print or moving anything.
+  if any) before starting a print or moving anything. Tools that start a job
+  refuse a busy printer, and after a finished or stopped print they also need
+  `plate_clear: true`, since the last part may still be on the plate.
 - **`run_gcode` runs as a tiny print job.** So it only works while the printer is
   idle, and it shows up in the printer's history.
 - **Connect's API is unofficial.** Prusa doesn't publish it; prusactl uses the
