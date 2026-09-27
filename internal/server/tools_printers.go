@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -15,12 +16,45 @@ import (
 	"github.com/trevin-lee/prusactl/internal/connect"
 )
 
-// summaryKeys are the printer fields worth showing in a list; get_printer
-// returns everything.
+// summaryKeys are the Connect printer fields worth showing in a list;
+// get_printer returns everything.
 var summaryKeys = []string{
-	"uuid", "name", "location", "team_id", "team_name", "printer_type_name", "printer_model",
+	"uuid", "name", "sn", "location", "team_id", "team_name", "printer_type_name", "printer_model",
 	"connect_state", "printer_state", "temp", "chamber", "filament", "nozzle_diameter",
 	"speed", "flow", "job_info", "dialog_info", "is_online", "last_online", "firmware",
+}
+
+// secretKey matches fields that hold credentials (PrusaLink API keys, camera
+// tokens) so they never reach the model.
+var secretKey = regexp.MustCompile(`(?i)api_?key|token|password|secret`)
+
+func redact(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if secretKey.MatchString(k) {
+				if val != nil && val != "" {
+					t[k] = "[redacted]"
+				}
+			} else {
+				t[k] = redact(val)
+			}
+		}
+	case []any:
+		for i := range t {
+			t[i] = redact(t[i])
+		}
+	}
+	return v
+}
+
+// redactRaw parses, redacts, and returns JSON; unparseable input passes through.
+func redactRaw(raw json.RawMessage) any {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return raw
+	}
+	return redact(v)
 }
 
 type snapshotInput struct {
@@ -40,67 +74,112 @@ type telemetryInput struct {
 	Granularity int `json:"granularity,omitempty" jsonschema:"seconds between samples; default 15"`
 }
 
+// directStatus gathers PrusaLink's view of the printer.
+func (s *Server) directStatus(ctx context.Context) (map[string]any, error) {
+	var status, info, job json.RawMessage
+	if _, err := s.link.Get(ctx, "/api/v1/status", &status); err != nil {
+		return nil, err
+	}
+	if _, err := s.link.Get(ctx, "/api/v1/info", &info); err != nil {
+		return nil, err
+	}
+	hasJob, err := s.link.Get(ctx, "/api/v1/job", &job)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{"status": redactRaw(status), "info": redactRaw(info), "job": nil}
+	if hasJob {
+		out["job"] = redactRaw(job)
+	}
+	return out, nil
+}
+
 func (s *Server) addPrinterTools() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "list_printers",
-		Description: "List the printers on this Prusa Connect account with their state, temperatures, filament, " +
-			"current job progress, and any dialog waiting on the printer's screen.",
+		Description: "The printers prusactl can reach: the one set up for direct access (with whether it answers " +
+			"right now) and those on the Prusa Connect account, with state, temperatures, filament, job progress, " +
+			"and any dialog on the printer's screen.",
 		Annotations: readOnly("List printers"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-		raws, err := s.listPrinters(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-		out := make([]map[string]any, 0, len(raws))
-		for _, r := range raws {
-			var full map[string]any
-			if err := json.Unmarshal(r, &full); err != nil {
-				continue
+		out := map[string]any{}
+		if s.link != nil {
+			d := map[string]any{"host": s.link.Config.Host}
+			if info, err := s.probeLink(ctx); err != nil {
+				d["reachable"], d["error"] = false, err.Error()
+			} else {
+				d["reachable"], d["name"], d["serial"] = true, displayName(info, s.link.Config.Host), info.Serial
 			}
-			sum := map[string]any{}
-			for _, k := range summaryKeys {
-				if v, ok := full[k]; ok && v != nil {
-					sum[k] = v
+			out["direct"] = d
+		}
+		if s.session.SignedIn() {
+			raws, err := s.listPrinters(ctx)
+			if err != nil {
+				out["connect_error"] = err.Error()
+			}
+			list := make([]map[string]any, 0, len(raws))
+			for _, r := range raws {
+				var full map[string]any
+				if err := json.Unmarshal(r, &full); err != nil {
+					continue
 				}
+				sum := map[string]any{}
+				for _, k := range summaryKeys {
+					if v, ok := full[k]; ok && v != nil {
+						sum[k] = v
+					}
+				}
+				list = append(list, sum)
 			}
-			out = append(out, sum)
+			out["connect"] = list
 		}
-		return jsonResult(map[string]any{"printers": out})
-	})
-
-	mcp.AddTool(s.mcp, &mcp.Tool{
-		Name: "get_printer",
-		Description: "Full live status of one printer as Connect reports it: state, temperatures and targets, axis " +
-			"positions, fans, speed/flow, filament, nozzle, current job (progress, time remaining, file), the dialog " +
-			"currently on the printer's screen (dialog_info, answer it with respond_to_dialog), storage, and settings.",
-		Annotations: readOnly("Get printer status"),
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in printerRef) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
-		if err != nil {
-			return nil, nil, err
-		}
-		var out json.RawMessage
-		if err := s.client.Get(ctx, printerPath(p.UUID), nil, &out); err != nil {
-			return nil, nil, err
+		if len(out) == 0 {
+			return nil, nil, fmt.Errorf("nothing is set up yet: run `prusactl setup` (direct) or `prusactl login` (Prusa Connect) in a terminal")
 		}
 		return jsonResult(out)
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name: "get_printer",
+		Description: "Live status of the printer: state, temperatures and targets, axis positions, fans, " +
+			"speed/flow, and the current job (progress, time remaining, file). Through Prusa Connect it also " +
+			"includes filament, nozzle, settings, and dialog_info: the dialog currently on the printer's screen, " +
+			"which respond_to_dialog can answer.",
+		Annotations: readOnly("Get printer status"),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in printerRef) (*mcp.CallToolResult, any, error) {
+		t, err := s.route(ctx, in)
+		if err != nil {
+			return nil, nil, err
+		}
+		if t.direct {
+			st, err := s.directStatus(ctx)
+			if err != nil {
+				return nil, nil, err
+			}
+			return jsonResult(withVia(t, st))
+		}
+		var out json.RawMessage
+		if err := s.connect.Get(ctx, printerPath(t.connect.UUID), nil, &out); err != nil {
+			return nil, nil, err
+		}
+		return jsonResult(withVia(t, map[string]any{"status": redactRaw(out)}))
+	})
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "get_camera_snapshot",
-		Description: "The latest image from a camera attached to the printer in Prusa Connect, so you can see the " +
-			"print, the bed, and the nozzle. Use it before starting a print or moving anything (is the plate clear?) and " +
+		Description: "The latest image from the printer's camera (via Prusa Connect), so you can see the print, " +
+			"the bed, and the nozzle. Use it before starting a print or moving anything (is the plate clear?) and " +
 			"to watch a print for failures. Reports how old the image is.",
 		Annotations: readOnly("Camera snapshot"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in snapshotInput) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		p, err := s.connectPrinter(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
 		var cams struct {
 			Cameras []map[string]any `json:"cameras"`
 		}
-		if err := s.client.Get(ctx, printerPath(p.UUID, "cameras"), nil, &cams); err != nil {
+		if err := s.connect.Get(ctx, printerPath(p.UUID, "cameras"), nil, &cams); err != nil {
 			return nil, nil, err
 		}
 		if len(cams.Cameras) == 0 {
@@ -120,11 +199,11 @@ func (s *Server) addPrinterTools() {
 		}
 		id := connect.PathEscape(jsonID(cam["id"]))
 		query := url.Values{"printer_uuid": {p.UUID}}
-		resp, err := s.client.Do(ctx, connect.Request{Method: http.MethodGet, Path: "/app/cameras/" + id + "/snapshots/last", Query: query})
+		resp, err := s.connect.Do(ctx, connect.Request{Method: http.MethodGet, Path: "/app/cameras/" + id + "/snapshots/last", Query: query})
 		if connect.IsStatus(err, http.StatusNotFound) {
 			// WebRTC cameras (Buddy3D) may never have pushed a full snapshot;
 			// the web app falls back to the thumbnail endpoint.
-			resp, err = s.client.Do(ctx, connect.Request{Method: http.MethodGet, Path: "/thumbnail/camera/" + id, Query: query})
+			resp, err = s.connect.Do(ctx, connect.Request{Method: http.MethodGet, Path: "/thumbnail/camera/" + id, Query: query})
 		}
 		if err != nil {
 			return nil, nil, err
@@ -150,10 +229,10 @@ func (s *Server) addPrinterTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "get_telemetry",
-		Description: "Recent telemetry time series for the printer (temperatures, fans, speed, axis positions over time).",
+		Description: "Recent telemetry history from Prusa Connect: temperatures, fans, speed, and axis positions over time.",
 		Annotations: readOnly("Printer telemetry"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in telemetryInput) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		p, err := s.connectPrinter(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -169,7 +248,7 @@ func (s *Server) addPrinterTools() {
 			"granularity": {strconv.Itoa(gran)},
 		}
 		var out json.RawMessage
-		if err := s.client.Get(ctx, printerPath(p.UUID, "telemetry"), q, &out); err != nil {
+		if err := s.connect.Get(ctx, printerPath(p.UUID, "telemetry"), q, &out); err != nil {
 			return nil, nil, err
 		}
 		return jsonResult(out)
@@ -177,16 +256,17 @@ func (s *Server) addPrinterTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "list_events",
-		Description: "The printer's event log, newest first: state changes, job starts and finishes, errors, " +
-			"attention requests, commands, and file transfers. Use it to find out what happened while nobody was watching.",
+		Description: "The printer's event log from Prusa Connect, newest first: state changes, job starts and " +
+			"finishes, errors, attention requests, commands, and file transfers. Use it to find out what happened " +
+			"while nobody was watching.",
 		Annotations: readOnly("Printer events"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in eventsInput) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		p, err := s.connectPrinter(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
 		var out json.RawMessage
-		if err := s.client.Get(ctx, printerPath(p.UUID, "events"), pageQuery(in.Limit, in.Offset, 20), &out); err != nil {
+		if err := s.connect.Get(ctx, printerPath(p.UUID, "events"), pageQuery(in.Limit, in.Offset, 20), &out); err != nil {
 			return nil, nil, err
 		}
 		return jsonResult(out)

@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>Run your Prusa 3D printer from the terminal, or hand it to an AI agent.</b><br>
-  A CLI and <a href="https://modelcontextprotocol.io">MCP</a> server for <a href="https://connect.prusa3d.com">Prusa Connect</a>.
+  A CLI and <a href="https://modelcontextprotocol.io">MCP</a> server that talks to the printer directly on your network, and through <a href="https://connect.prusa3d.com">Prusa Connect</a> from anywhere.
 </p>
 
 <p align="center">
@@ -14,25 +14,22 @@
 
 ---
 
-`prusactl mcp` gives an agent such as Claude the same reach you have in the Connect
-web app. It can:
+`prusactl mcp` gives an agent such as Claude hands on your printer. It can:
 
-- **Watch:** check state, temperatures, job progress and the camera.
-- **Print:** upload files, start them, queue them, pause, resume and stop.
-- **Control:** home, move axes, set temperatures, speed and flow, load and unload
-  filament, and run mesh bed leveling.
+- **Watch:** check state, temperatures, job progress, and (with Connect) the camera.
+- **Print:** upload files, start them, pause, resume, stop, and queue.
+- **Control:** heat, home, move, load and unload filament, and level the bed.
 - **Answer the printer:** press the buttons on dialogs shown on its screen, such as
-  runout or errors.
-- **Everything else:** run any other command the printer's firmware accepts through Connect.
+  runout or errors. Needs Connect.
+- **Run G-code:** any G-code, over the direct connection.
 
-It is one Go binary. It talks only to Prusa Connect, so it works wherever you are,
-not just on your home network.
+It is one Go binary with no browser involved. Setup is two terminal prompts.
 
 ## Things you can ask
 
 > How's the print going? Show me the camera.
 >
-> When this finishes, print `~/Downloads/bracket.bgcode` next.
+> Print `~/Downloads/bracket.bgcode`.
 >
 > Preheat for PETG.
 >
@@ -44,14 +41,16 @@ not just on your home network.
 
 ## Quick start
 
-You need Go 1.26+, plus Google Chrome or another Chromium browser for the one-time
-sign-in window.
-
 ```sh
 go install github.com/trevin-lee/prusactl/cmd/prusactl@latest
-prusactl login                 # sign in to your Prusa Account in a browser window
-prusactl api /app/printers     # check that it can see your printers
+
+prusactl setup 192.168.1.50    # the printer's address; asks for its PrusaLink password
+prusactl status
+
+prusactl login                 # optional: Prusa Connect, for remote access, camera, dialogs
 ```
+
+The PrusaLink password is on the printer under **Settings → Network → PrusaLink**.
 
 Add it to Claude Code:
 
@@ -65,100 +64,107 @@ Any other MCP client works the same way: run `prusactl mcp` as a stdio server.
 
 ```mermaid
 flowchart LR
-    agent["AI agent<br/>(Claude Code, …)"] -- "MCP over stdio" --> mcp["prusactl mcp"]
-    you["You, in a terminal"] --> cli["prusactl login / status / api"]
-    mcp --> keychain[("OS keychain<br/>session tokens")]
-    cli --> keychain
-    mcp -- "HTTPS, Bearer token" --> connect["Prusa Connect<br/>connect.prusa3d.com"]
-    cli -- "HTTPS, Bearer token" --> connect
-    connect <--> printer["Your printer"]
+    agent["AI agent<br/>(Claude Code, …)"] -- "MCP over stdio" --> px["prusactl"]
+    you["You, in a terminal"] --> px
+    px -- "local network<br/>PrusaLink API" --> printer["Your printer"]
+    px -. "internet, optional" .-> connect["Prusa Connect"]
+    connect <-.-> printer
+    px --- keychain[("OS keychain")]
 ```
 
-The CLI and the MCP server are the same binary and share one saved session.
-Signing in from either one signs in both.
+prusactl reaches the printer two ways, and each tool picks one:
 
-### Signing in
+| | Direct (PrusaLink) | Prusa Connect |
+|---|---|---|
+| Set up with | `prusactl setup` and the password on the printer's screen | `prusactl login` with your Prusa Account |
+| Reaches the printer | On your network | From anywhere |
+| Status, files, upload, print, pause/resume/stop | ✅ | ✅ |
+| Heat, move, filament, leveling | ✅ via `run_gcode` (printer idle) | ✅ via firmware commands |
+| Any G-code | ✅ | ❌ |
+| Camera, on-screen dialogs, queue, history, events | ❌ | ✅ |
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant P as prusactl
-    participant W as Sign-in window
-    participant A as account.prusa3d.com
-    P->>W: open Prusa's sign-in page (PKCE challenge)
-    W->>A: you sign in: password, 2FA, Google, Apple…
-    A-->>W: redirect to Connect with a one-time code
-    W-->>P: redirect intercepted inside the window
-    P->>A: code + PKCE verifier → access and refresh tokens
-    P->>P: tokens saved in the OS keychain
-```
+The direct route is used whenever the printer answers. Otherwise, or for
+Connect-only features, the tool goes through Connect. Every result says which
+route it used.
 
-- **Your password** never passes through prusactl. You type it into Prusa's own
-  page.
-- **The sign-in window** uses a throwaway browser profile that is deleted
-  afterwards.
+### Signing in to Prusa Connect
+
+`prusactl login` asks for your Prusa Account email and password, plus a 2FA
+code if your account has one. It fills in Prusa's own login page over HTTPS the
+same way a browser would. It then trades the resulting code for tokens, using
+the OAuth + PKCE flow of the Connect web app.
+
+- **Your password** is sent only to account.prusa3d.com and is never stored.
 - **Where tokens are kept:** the OS keychain (macOS Keychain, Secret Service, or
   Windows Credential Manager), under the service `prusactl`.
 - **Staying signed in:** tokens refresh on their own. Prusa rotates refresh
   tokens, so refreshes are coordinated between processes. Several agents can
   share one session without signing each other out.
+- **Google or Apple sign-in** accounts need a Prusa Account password set before
+  this works.
+
+The printer's PrusaLink password is kept in the same keychain.
 
 ## MCP tools
 
-| Tool | What it does |
-| --- | --- |
-| `login`, `logout`, `auth_status` | Sign in through the browser, forget the session, or show who is signed in |
-| `list_printers`, `get_printer` | State, temperatures, filament, job progress, and any dialog on screen |
-| `get_camera_snapshot` | Latest camera image, with how old it is |
-| `get_telemetry`, `list_events` | Telemetry history and the printer's event log |
-| `list_supported_commands` | Every command the firmware accepts, with arguments and allowed states |
-| `send_command` | Run any of those commands: HOME, MOVE, temperatures, speed and flow, filament, mesh bed leveling, and more |
-| `get_command` | Check on a command sent in the background |
-| `control_print` | Pause, resume, or stop |
-| `respond_to_dialog` | Press a button on the printer's screen |
-| `list_printer_files`, `delete_printer_files` | Browse or clean up the printer's storage |
-| `upload_file` | Send a local `.bgcode`/`.gcode` to the printer, and optionally queue or start it |
-| `start_print` | Print a file already on the printer |
-| `get_queue`, `add_to_queue`, `remove_from_queue` | Manage the print queue |
-| `get_transfers`, `list_connect_files` | File transfers and Connect cloud storage |
-| `list_jobs`, `get_job` | Print history, and the objects in a job that can be cancelled |
-| `api_request` | Any other Connect endpoint, as the signed-in user |
+| Tool | Route | What it does |
+| --- | --- | --- |
+| `connection_status` | both | How the printer can be reached right now, and what to set up |
+| `list_printers`, `get_printer` | both | State, temperatures, job progress, and (via Connect) any dialog on screen |
+| `list_printer_files`, `delete_printer_files` | both | Browse or clean up the printer's storage |
+| `upload_file` | both | Send a local `.bgcode`/`.gcode` to the printer, and optionally start or queue it |
+| `start_print` | both | Print a file already on the printer |
+| `control_print` | both | Pause, resume, continue, or stop |
+| `get_transfers` | both | File transfers in progress |
+| `run_gcode` | direct | Run G-code, such as heating, homing, moving, or filament changes, while the printer is idle |
+| `get_camera_snapshot` | Connect | Latest camera image, with how old it is |
+| `respond_to_dialog` | Connect | Press a button on the printer's screen |
+| `list_supported_commands`, `send_command`, `get_command` | Connect | Every firmware command Connect exposes, with arguments and allowed states |
+| `get_queue`, `add_to_queue`, `remove_from_queue` | Connect | The print queue |
+| `list_jobs`, `get_job` | Connect | Print history, and the objects in a job that can be cancelled |
+| `get_telemetry`, `list_events` | Connect | Telemetry history and the event log |
+| `list_connect_files` | Connect | Connect cloud storage |
+| `api_request` | both | Any other endpoint: `/api/...` goes to the printer, `/app/...` to Connect |
 
-Every `printer` argument accepts a name or a UUID. If your account has only one
-printer, you can leave it out.
+Every `printer` argument accepts a name, serial number, or Connect UUID. With one
+printer you can leave it out. `via: "direct"` or `via: "connect"` forces a route.
 
 ## CLI
 
 ```text
-prusactl login [--timeout 10m]    sign in through a browser window
-prusactl logout                   forget the saved session
-prusactl status                   show who is signed in
-prusactl mcp                      run the MCP server on stdio
-prusactl api [METHOD] PATH [JSON] call the Connect API directly
+prusactl setup [ADDRESS]           connect directly to the printer on your network
+prusactl login                     optional: sign in to Prusa Connect
+prusactl logout                    forget the Prusa Connect session
+prusactl status                    printer state and how it is reachable
+prusactl mcp                       run the MCP server on stdio
+prusactl api [METHOD] PATH [JSON]  /api/... to the printer, /app/... to Prusa Connect
 ```
+
+`prusactl setup --forget` removes the saved printer. `--api-key` uses a PrusaLink
+API key instead of the password, and `--password-stdin` reads the secret from a
+pipe.
 
 ## Limits
 
 - **It has no hands.** It can't clear the build plate, swap a spool, or fix a
-  clog. A queued print starts only once the printer is marked ready, meaning the
-  plate is clear. The agent can set that flag, so the tool descriptions tell it to
-  check the camera before starting a print or moving anything.
-- **No raw G-code.** Connect doesn't accept arbitrary G-code on Buddy-firmware
-  printers (MK4, XL, CORE One). You get exactly what `list_supported_commands`
-  reports, plus G-code snippets you've saved to your Connect team.
-- **Unofficial API.** Prusa doesn't publish Connect's web API. prusactl uses the
-  same endpoints and sign-in as connect.prusa3d.com, so a change on Prusa's side
-  can break it.
+  clog. The tool descriptions tell the agent to check the printer (and the camera,
+  if any) before starting a print or moving anything.
+- **`run_gcode` runs as a tiny print job.** So it only works while the printer is
+  idle, and it shows up in the printer's history.
+- **Connect's API is unofficial.** Prusa doesn't publish it; prusactl uses the
+  same endpoints as connect.prusa3d.com, so a change on Prusa's side can break the
+  Connect route. The direct route uses Prusa's documented
+  [PrusaLink API](https://github.com/prusa3d/Prusa-Link-Web/blob/master/spec/openapi.yaml).
 
 ## Configuration
 
-| Variable | Default |
+| Variable | Purpose |
 | --- | --- |
-| `PRUSA_CONNECT_URL` | `https://connect.prusa3d.com` |
-| `PRUSA_ACCOUNT_URL` | `https://account.prusa3d.com` |
-| `PRUSA_CLIENT_ID` | the Connect web app's public client id |
-| `PRUSA_REDIRECT_URI` | `https://connect.prusa3d.com/login/auth-callback` |
-| `PRUSACTL_BROWSER` | Google Chrome, then Chromium, Brave, or Edge |
+| `PRUSACTL_HOST`, `PRUSACTL_USER`, `PRUSACTL_AUTH` | Override the saved printer address, username, or `digest`/`api-key` |
+| `PRUSACTL_PASSWORD`, `PRUSACTL_API_KEY` | Supply the printer secret instead of the keychain |
+| `PRUSACTL_CONFIG` | Alternate config file (default: `prusactl/config.json` in the OS config dir) |
+| `PRUSA_CONNECT_URL`, `PRUSA_ACCOUNT_URL` | Connect and Prusa Account origins |
+| `PRUSA_CLIENT_ID`, `PRUSA_REDIRECT_URI` | The OAuth client (default: the Connect web app's) |
 
 ## Development
 

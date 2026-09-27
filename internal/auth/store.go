@@ -3,8 +3,6 @@ package auth
 import (
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 
 	"github.com/zalando/go-keyring"
 )
@@ -71,14 +69,4 @@ func (KeyringStore) Clear() error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// stateDir holds the cross-process refresh lock.
-func stateDir() (string, error) {
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(base, "prusactl")
-	return dir, os.MkdirAll(dir, 0o700)
 }

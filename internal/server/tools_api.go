@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,11 +14,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/trevin-lee/prusactl/internal/connect"
+	"github.com/trevin-lee/prusactl/internal/link"
 )
 
 type apiInput struct {
 	Method string            `json:"method,omitempty" jsonschema:"GET, POST, PUT, PATCH or DELETE; default GET"`
-	Path   string            `json:"path" jsonschema:"API path starting with /app/, e.g. /app/printers/{uuid}/events"`
+	Path   string            `json:"path" jsonschema:"/api/... for the printer (PrusaLink) or /app/... for Prusa Connect"`
 	Query  map[string]string `json:"query,omitempty" jsonschema:"query-string parameters"`
 	Body   any               `json:"body,omitempty" jsonschema:"JSON request body"`
 }
@@ -25,11 +27,12 @@ type apiInput struct {
 func (s *Server) addAPITool() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "api_request",
-		Description: "Call any Prusa Connect web API endpoint as the signed-in user, for anything the other tools don't " +
-			"cover (printer settings via PATCH /app/printers/{uuid}, groups, teams, notifications, statistics under " +
-			"/app/stats/printers/{uuid}/..., firmware, Connect file storage under /app/teams/{team_id}/files). The API is the " +
-			"one connect.prusa3d.com itself uses. Prefer the dedicated tools when one fits.",
-		Annotations: mutating("Raw Connect API call", true),
+		Description: "Call any printer API endpoint directly, for anything the other tools don't cover. Paths " +
+			"starting with /api/ go to the printer itself over the local network (PrusaLink, e.g. /api/v1/status); " +
+			"paths starting with /app/ go to Prusa Connect as the signed-in user (e.g. PATCH /app/printers/{uuid} for " +
+			"settings, /app/stats/printers/{uuid}/..., /app/teams/{team_id}/files). Credentials in responses are " +
+			"redacted. Prefer the dedicated tools when one fits.",
+		Annotations: mutating("Raw API call", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in apiInput) (*mcp.CallToolResult, any, error) {
 		method := strings.ToUpper(strings.TrimSpace(in.Method))
 		if method == "" {
@@ -44,19 +47,37 @@ func (s *Server) addAPITool() {
 		if err != nil {
 			return nil, nil, err
 		}
-		// Only relative /app/ paths: the bearer token must never be sent elsewhere.
-		if u.Scheme != "" || u.Host != "" || !strings.HasPrefix(u.Path, "/app/") || strings.Contains(u.Path, "..") {
-			return nil, nil, fmt.Errorf("path must be a Connect API path starting with /app/ (got %q)", in.Path)
+		// Only relative API paths: credentials must never be sent elsewhere.
+		direct := strings.HasPrefix(u.Path, "/api/")
+		if u.Scheme != "" || u.Host != "" || strings.Contains(u.Path, "..") || (!direct && !strings.HasPrefix(u.Path, "/app/")) {
+			return nil, nil, fmt.Errorf("path must start with /api/ (printer) or /app/ (Prusa Connect), got %q", in.Path)
 		}
 		q := u.Query()
 		for k, v := range in.Query {
 			q.Set(k, v)
 		}
-		req := connect.Request{Method: method, Path: u.Path, Query: q}
-		if in.Body != nil {
-			req.JSON = in.Body
+		var resp *http.Response
+		if direct {
+			if s.link == nil {
+				return nil, nil, s.linkErr
+			}
+			req := link.Request{Method: method, Path: u.Path, Query: q}
+			if in.Body != nil {
+				b, err := json.Marshal(in.Body)
+				if err != nil {
+					return nil, nil, err
+				}
+				req.Body = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(b)), nil }
+				req.ContentLength, req.ContentType = int64(len(b)), "application/json"
+			}
+			resp, err = s.link.Do(ctx, req)
+		} else {
+			req := connect.Request{Method: method, Path: u.Path, Query: q}
+			if in.Body != nil {
+				req.JSON = in.Body
+			}
+			resp, err = s.connect.Do(ctx, req)
 		}
-		resp, err := s.client.Do(ctx, req)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -69,8 +90,10 @@ func (s *Server) addAPITool() {
 		switch {
 		case strings.HasPrefix(ct, "image/"):
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.ImageContent{Data: body, MIMEType: ct}}}, nil, nil
+		case len(body) == 0:
+			return jsonResult(map[string]any{"status": resp.StatusCode})
 		case json.Valid(body):
-			return jsonResult(map[string]any{"status": resp.StatusCode, "body": json.RawMessage(body)})
+			return jsonResult(map[string]any{"status": resp.StatusCode, "body": redactRaw(body)})
 		case utf8.Valid(body):
 			return jsonResult(map[string]any{"status": resp.StatusCode, "content_type": ct, "body": string(body)})
 		default:

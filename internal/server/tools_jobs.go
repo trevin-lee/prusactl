@@ -27,7 +27,7 @@ func (s *Server) addJobTools() {
 		Description: "The printer's job history, newest first: what printed, when, for how long, and how it ended.",
 		Annotations: readOnly("Print history"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listJobsInput) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		p, err := s.connectPrinter(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -36,7 +36,7 @@ func (s *Server) addJobTools() {
 			q.Add("state", strings.ToUpper(st))
 		}
 		var out json.RawMessage
-		if err := s.client.Get(ctx, printerPath(p.UUID, "jobs"), q, &out); err != nil {
+		if err := s.connect.Get(ctx, printerPath(p.UUID, "jobs"), q, &out); err != nil {
 			return nil, nil, err
 		}
 		return jsonResult(out)
@@ -48,12 +48,12 @@ func (s *Server) addJobTools() {
 			"(cancelable.objects; cancel one with send_command CANCEL_OBJECT and kwargs {\"object_id\": id}).",
 		Annotations: readOnly("Get job"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		p, err := s.connectPrinter(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
 		var out json.RawMessage
-		if err := s.client.Get(ctx, printerPath(p.UUID, "jobs", strconv.FormatInt(in.JobID, 10)), nil, &out); err != nil {
+		if err := s.connect.Get(ctx, printerPath(p.UUID, "jobs", strconv.FormatInt(in.JobID, 10)), nil, &out); err != nil {
 			return nil, nil, err
 		}
 		return jsonResult(out)

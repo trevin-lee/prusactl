@@ -100,9 +100,10 @@ func (s *Session) Invalidate(access string) {
 	}
 }
 
-// Login runs the browser flow and stores the result.
-func (s *Session) Login(ctx context.Context, timeout time.Duration) (*Token, error) {
-	tok, err := s.Config.BrowserLogin(ctx, timeout)
+// Login signs in with the user's Prusa Account credentials (see
+// PasswordLogin) and stores the resulting tokens.
+func (s *Session) Login(ctx context.Context, prompt Prompter) (*Token, error) {
+	tok, err := s.Config.PasswordLogin(ctx, prompt)
 	if err != nil {
 		return nil, err
 	}

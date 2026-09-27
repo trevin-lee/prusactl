@@ -1,7 +1,7 @@
-// Package auth signs in to Prusa Connect the same way connect.prusa3d.com does:
-// an OAuth 2.0 authorization-code flow with PKCE against Prusa Account, using
-// the Connect web app's public client. The tokens it yields are the same ones
-// the web app sends as "Authorization: Bearer" to the /app API.
+// Package auth signs in to Prusa Connect with the same OAuth 2.0
+// authorization-code + PKCE flow connect.prusa3d.com uses against Prusa
+// Account, with the Connect web app's public client. The tokens it yields are
+// the ones the web app sends as "Authorization: Bearer" to the /app API.
 package auth
 
 import (
@@ -30,7 +30,7 @@ const (
 )
 
 // ErrNotLoggedIn means there is no usable refresh token; run the login flow.
-var ErrNotLoggedIn = errors.New("not signed in to Prusa Connect: run `prusactl login` or call the login tool")
+var ErrNotLoggedIn = errors.New("not signed in to Prusa Connect: run `prusactl login` in a terminal")
 
 // Config identifies the OAuth client.
 type Config struct {

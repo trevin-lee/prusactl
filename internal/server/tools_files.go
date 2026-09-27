@@ -17,6 +17,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/trevin-lee/prusactl/internal/connect"
+	"github.com/trevin-lee/prusactl/internal/link"
 )
 
 type listFilesInput struct {
@@ -31,7 +32,8 @@ type uploadInput struct {
 	LocalPath   string `json:"local_path" jsonschema:"absolute path of a sliced file (.bgcode or .gcode) on this computer"`
 	Destination string `json:"destination,omitempty" jsonschema:"printer folder to copy it into, e.g. /usb/; default is the printer's first storage"`
 	Filename    string `json:"filename,omitempty" jsonschema:"name on the printer; default is the local file name"`
-	Then        string `json:"then,omitempty" jsonschema:"after uploading: none (just store it on the printer), queue (append to the print queue), or print (queue first and mark the printer ready so it starts); default none"`
+	Then        string `json:"then,omitempty" jsonschema:"after uploading: none (just store it), print (start it right away), or queue (add to the Prusa Connect print queue); default none"`
+	Overwrite   bool   `json:"overwrite,omitempty" jsonschema:"replace a file with the same name on the printer (direct route)"`
 }
 
 type queueInput struct {
@@ -46,7 +48,7 @@ type queueInput struct {
 
 type startPrintInput struct {
 	printerRef
-	Path string `json:"path" jsonschema:"file on the printer, e.g. /usb/part.bgcode (see list_printer_files)"`
+	Path string `json:"path" jsonschema:"file on the printer as list_printer_files reports it, e.g. /usb/3DBENC~2.BGC"`
 }
 
 type deleteFilesInput struct {
@@ -68,80 +70,114 @@ type connectFilesInput struct {
 func (s *Server) addFileTools() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "list_printer_files",
-		Description: "Browse files on the printer's own storage (USB drive etc.). Without path, lists the storages.",
+		Description: "Browse files on the printer's own storage (USB drive). Without path, lists the storages.",
 		Annotations: readOnly("List printer files"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listFilesInput) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		t, err := s.route(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
+		dir := strings.TrimSpace(in.Path)
 		var out json.RawMessage
-		if strings.TrimSpace(in.Path) == "" {
-			err = s.client.Get(ctx, printerPath(p.UUID, "storages"), nil, &out)
-		} else {
+		switch {
+		case t.direct && dir == "":
+			_, err = s.link.Get(ctx, "/api/v1/storage", &out)
+		case t.direct:
+			var path string
+			if path, err = link.FilePath(dir); err == nil {
+				_, err = s.link.Get(ctx, path, &out)
+			}
+			if err == nil {
+				out = compactFolder(dir, out)
+			}
+		case dir == "":
+			err = s.connect.Get(ctx, printerPath(t.connect.UUID, "storages"), nil, &out)
+		default:
 			q := pageQuery(in.Limit, in.Offset, 50)
-			q.Set("path", in.Path)
-			err = s.client.Get(ctx, printerPath(p.UUID, "files"), q, &out)
+			q.Set("path", dir)
+			err = s.connect.Get(ctx, printerPath(t.connect.UUID, "files"), q, &out)
 		}
 		if err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(out)
+		return jsonResult(withVia(t, map[string]any{"files": out}))
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "delete_printer_files",
-		Description: "Delete files from the printer's storage. Folders are removed with send_command DELETE_FOLDER.",
+		Description: "Delete files from the printer's storage.",
 		Annotations: mutating("Delete printer files", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in deleteFilesInput) (*mcp.CallToolResult, any, error) {
 		if len(in.Paths) == 0 {
 			return nil, nil, errors.New("paths is empty")
 		}
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		t, err := s.route(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
+		}
+		if t.direct {
+			for i, p := range in.Paths {
+				path, err := link.FilePath(p)
+				if err == nil {
+					_, err = s.link.JSON(ctx, link.Request{Method: http.MethodDelete, Path: path}, nil)
+				}
+				if err != nil {
+					return nil, nil, fmt.Errorf("deleted %q; failed on %s: %w", in.Paths[:i], p, err)
+				}
+			}
+			return jsonResult(withVia(t, map[string]any{"deleted": in.Paths}))
 		}
 		var out json.RawMessage
-		err = s.client.JSON(ctx, connect.Request{Method: http.MethodDelete, Path: printerPath(p.UUID, "files"), JSON: map[string]any{"files": in.Paths}}, &out)
+		err = s.connect.JSON(ctx, connect.Request{Method: http.MethodDelete, Path: printerPath(t.connect.UUID, "files"), JSON: map[string]any{"files": in.Paths}}, &out)
 		if err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(map[string]any{"printer": p.Name, "deleted": in.Paths, "response": out})
+		return jsonResult(withVia(t, map[string]any{"deleted": in.Paths, "response": out}))
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "upload_file",
-		Description: "Upload a sliced print file from this computer to Prusa Connect and on to the printer's storage, " +
-			"optionally queueing it or starting it. Connect transfers the file to the printer in the background; " +
-			"get_transfers shows progress. With then=print the printer is marked ready and starts the job as soon as " +
-			"the file arrives: confirm the plate is clear (get_camera_snapshot) first.",
+		Description: "Upload a sliced print file (.bgcode/.gcode) from this computer to the printer, optionally " +
+			"starting it (then=print) or adding it to the Prusa Connect queue (then=queue). Directly on the local " +
+			"network the file goes straight to the printer; through Connect it is stored in Connect and copied to the " +
+			"printer in the background (get_transfers shows progress). Before then=print, confirm the plate is clear.",
 		Annotations: mutating("Upload print file", false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in uploadInput) (*mcp.CallToolResult, any, error) {
 		then := strings.ToLower(strings.TrimSpace(in.Then))
-		if then == "" {
+		switch then {
+		case "":
 			then = "none"
+		case "none", "print":
+		case "queue":
+			in.Via = "connect" // the queue lives in Connect
+		default:
+			return nil, nil, fmt.Errorf("then must be none, print, or queue (got %q)", in.Then)
 		}
-		if then != "none" && then != "queue" && then != "print" {
-			return nil, nil, fmt.Errorf("then must be none, queue, or print (got %q)", in.Then)
-		}
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		t, err := s.route(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
-		res, err := s.upload(ctx, p, in.LocalPath, in.Destination, in.Filename)
+		if t.direct {
+			path, err := s.uploadDirect(ctx, in.LocalPath, in.Destination, in.Filename, in.Overwrite, then == "print")
+			if err != nil {
+				return nil, nil, err
+			}
+			return jsonResult(withVia(t, map[string]any{"uploaded": path, "printing": then == "print"}))
+		}
+		p := t.connect
+		res, err := s.uploadViaConnect(ctx, p, in.LocalPath, in.Destination, in.Filename)
 		if err != nil {
 			return nil, nil, err
 		}
-		out := map[string]any{"printer": p.Name, "upload": res.Upload, "file": res.File}
+		out := withVia(t, map[string]any{"upload": res.Upload, "file": res.File})
 		if then != "none" {
-			pos := -1
-			body := map[string]any{"hash": res.Hash, "team_id": p.TeamID, "position": pos}
+			body := map[string]any{"hash": res.Hash, "team_id": p.TeamID, "position": -1}
 			if then == "print" {
 				body["position"] = 0
 				body["set_ready"] = true
 			}
 			var queued json.RawMessage
-			if err := s.client.JSON(ctx, connect.Request{Method: http.MethodPost, Path: printerPath(p.UUID, "queue"), JSON: body}, &queued); err != nil {
+			if err := s.connect.JSON(ctx, connect.Request{Method: http.MethodPost, Path: printerPath(p.UUID, "queue"), JSON: body}, &queued); err != nil {
 				return nil, nil, fmt.Errorf("uploaded (hash %s) but queueing failed: %w", res.Hash, err)
 			}
 			out["queued"] = queued
@@ -152,31 +188,41 @@ func (s *Server) addFileTools() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "start_print",
 		Description: "Start printing a file that is already on the printer's storage. The printer must be idle " +
-			"and the plate clear: check get_printer and get_camera_snapshot first.",
+			"and the plate clear: check get_printer (and the camera, if any) first.",
 		Annotations: mutating("Start print", false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in startPrintInput) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		t, err := s.route(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
-		res, err := s.runCommand(ctx, p, "START_PRINT", map[string]any{"path": in.Path}, false, 0)
+		if t.direct {
+			path, err := link.FilePath(in.Path)
+			if err != nil {
+				return nil, nil, err
+			}
+			if _, err := s.link.JSON(ctx, link.Request{Method: http.MethodPost, Path: path}, nil); err != nil {
+				return nil, nil, err
+			}
+			return jsonResult(withVia(t, map[string]any{"started": in.Path}))
+		}
+		res, err := s.runCommand(ctx, t.connect, "START_PRINT", map[string]any{"path": in.Path}, false, 0)
 		if err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(res)
+		return jsonResult(withVia(t, map[string]any{"started": in.Path, "result": res}))
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "get_queue",
-		Description: "The printer's print queue in Connect: jobs waiting to print, in order, with their ids.",
+		Description: "The printer's print queue in Prusa Connect: jobs waiting to print, in order, with their ids.",
 		Annotations: readOnly("Get print queue"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in printerRef) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		p, err := s.connectPrinter(ctx, in)
 		if err != nil {
 			return nil, nil, err
 		}
 		var out json.RawMessage
-		if err := s.client.Get(ctx, printerPath(p.UUID, "queue"), url.Values{"limit": {"100"}}, &out); err != nil {
+		if err := s.connect.Get(ctx, printerPath(p.UUID, "queue"), url.Values{"limit": {"100"}}, &out); err != nil {
 			return nil, nil, err
 		}
 		return jsonResult(out)
@@ -184,15 +230,15 @@ func (s *Server) addFileTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "add_to_queue",
-		Description: "Add a file to the printer's print queue, either one on the printer (path) or one in Connect " +
-			"storage (hash). Connect starts the next queued job when the printer is idle and marked ready " +
-			"(SET_PRINTER_READY via send_command, or set_ready here).",
+		Description: "Add a file to the printer's Prusa Connect print queue, either one on the printer (path) or " +
+			"one in Connect storage (hash). Connect starts the next queued job when the printer is idle and marked " +
+			"ready (send_command SET_PRINTER_READY, or set_ready here).",
 		Annotations: mutating("Queue print", false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in queueInput) (*mcp.CallToolResult, any, error) {
 		if (in.Path == "") == (in.Hash == "") {
 			return nil, nil, errors.New("pass exactly one of path or hash")
 		}
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		p, err := s.connectPrinter(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -217,7 +263,7 @@ func (s *Server) addFileTools() {
 			}
 		}
 		var out json.RawMessage
-		if err := s.client.JSON(ctx, connect.Request{Method: http.MethodPost, Path: printerPath(p.UUID, "queue"), JSON: body}, &out); err != nil {
+		if err := s.connect.JSON(ctx, connect.Request{Method: http.MethodPost, Path: printerPath(p.UUID, "queue"), JSON: body}, &out); err != nil {
 			return nil, nil, err
 		}
 		return jsonResult(out)
@@ -225,15 +271,15 @@ func (s *Server) addFileTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "remove_from_queue",
-		Description: "Remove a job from the printer's print queue.",
+		Description: "Remove a job from the printer's Prusa Connect print queue.",
 		Annotations: mutating("Remove queued job", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in queueJobInput) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		p, err := s.connectPrinter(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
 		path := printerPath(p.UUID, "queue", strconv.FormatInt(in.JobID, 10))
-		if err := s.client.JSON(ctx, connect.Request{Method: http.MethodDelete, Path: path}, nil); err != nil {
+		if err := s.connect.JSON(ctx, connect.Request{Method: http.MethodDelete, Path: path}, nil); err != nil {
 			return nil, nil, err
 		}
 		return textResult("Removed job %d from %s's queue.", in.JobID, p.Name)
@@ -241,31 +287,42 @@ func (s *Server) addFileTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "get_transfers",
-		Description: "File transfers to the printer: the one in progress (with progress and time remaining) and files waiting in the download queue.",
+		Description: "File transfers to the printer that are in progress (with progress), plus, through Prusa Connect, files waiting in its download queue.",
 		Annotations: readOnly("File transfers"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in printerRef) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		t, err := s.route(ctx, in)
 		if err != nil {
 			return nil, nil, err
 		}
+		if t.direct {
+			var tr json.RawMessage
+			found, err := s.link.Get(ctx, "/api/v1/transfer", &tr)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !found {
+				tr = json.RawMessage("null")
+			}
+			return jsonResult(withVia(t, map[string]any{"transfer": tr}))
+		}
 		var transfers, queue json.RawMessage
-		if err := s.client.Get(ctx, printerPath(p.UUID, "transfers"), nil, &transfers); err != nil {
+		if err := s.connect.Get(ctx, printerPath(t.connect.UUID, "transfers"), nil, &transfers); err != nil {
 			return nil, nil, err
 		}
-		if err := s.client.Get(ctx, printerPath(p.UUID, "download-queue"), nil, &queue); err != nil {
+		if err := s.connect.Get(ctx, printerPath(t.connect.UUID, "download-queue"), nil, &queue); err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(map[string]any{"transfers": transfers, "download_queue": queue})
+		return jsonResult(withVia(t, map[string]any{"transfers": transfers, "download_queue": queue}))
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "list_connect_files",
-		Description: "Files stored in Prusa Connect's cloud storage for a team (uploads, with their hashes for add_to_queue).",
+		Description: "Files stored in Prusa Connect's cloud storage for a team, with the hashes add_to_queue takes.",
 		Annotations: readOnly("List Connect files"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in connectFilesInput) (*mcp.CallToolResult, any, error) {
 		team := in.TeamID
 		if team == 0 {
-			p, err := s.resolvePrinter(ctx, "")
+			p, err := s.connectPrinter(ctx, printerRef{})
 			if err != nil {
 				return nil, nil, fmt.Errorf("pass team_id: %w", err)
 			}
@@ -273,7 +330,7 @@ func (s *Server) addFileTools() {
 		}
 		var out json.RawMessage
 		path := "/app/teams/" + strconv.FormatInt(team, 10) + "/files"
-		if err := s.client.Get(ctx, path, pageQuery(in.Limit, in.Offset, 50), &out); err != nil {
+		if err := s.connect.Get(ctx, path, pageQuery(in.Limit, in.Offset, 50), &out); err != nil {
 			return nil, nil, err
 		}
 		return jsonResult(out)
@@ -289,23 +346,116 @@ type uploadResult struct {
 // upload mirrors the web app: register the upload with its destination, then
 // PUT the bytes to the team's raw file endpoint. Connect then copies the file
 // to the printer on its own.
-func (s *Server) upload(ctx context.Context, p printerSummary, localPath, destination, filename string) (*uploadResult, error) {
+// compactFolder trims a PrusaLink folder listing to what an agent needs:
+// each entry's full path (the printer's short 8.3 name, which is what
+// start_print and delete take), display name, type, and times.
+func compactFolder(dir string, raw json.RawMessage) json.RawMessage {
+	var folder struct {
+		Name     string `json:"name"`
+		Children []struct {
+			Name        string `json:"name"`
+			DisplayName string `json:"display_name"`
+			Type        string `json:"type"`
+			Size        *int64 `json:"size,omitempty"`
+			MTimestamp  int64  `json:"m_timestamp"`
+			RO          bool   `json:"ro"`
+		} `json:"children"`
+	}
+	if json.Unmarshal(raw, &folder) != nil || folder.Children == nil {
+		return raw
+	}
+	base := "/" + strings.Trim(dir, "/") + "/"
+	entries := make([]map[string]any, 0, len(folder.Children))
+	for _, c := range folder.Children {
+		e := map[string]any{"path": base + c.Name, "name": c.DisplayName, "type": c.Type}
+		if c.DisplayName == "" {
+			e["name"] = c.Name
+		}
+		if c.MTimestamp > 0 {
+			e["modified"] = time.Unix(c.MTimestamp, 0).Format(time.DateTime)
+		}
+		if c.Size != nil {
+			e["size"] = *c.Size
+		}
+		if c.RO {
+			e["read_only"] = true
+		}
+		entries = append(entries, e)
+	}
+	b, err := json.Marshal(map[string]any{"folder": base, "entries": entries})
+	if err != nil {
+		return raw
+	}
+	return b
+}
+
+// checkPrintFile validates a local sliced file and settles its printer name.
+func checkPrintFile(localPath, filename string) (os.FileInfo, string, error) {
 	if !filepath.IsAbs(localPath) {
-		return nil, fmt.Errorf("local_path must be absolute (got %q)", localPath)
+		return nil, "", fmt.Errorf("local_path must be absolute (got %q)", localPath)
 	}
 	st, err := os.Stat(localPath)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if !st.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s is not a regular file", localPath)
+		return nil, "", fmt.Errorf("%s is not a regular file", localPath)
 	}
 	if filename == "" {
 		filename = filepath.Base(localPath)
 	}
+	if strings.ContainsAny(filename, "/\\") {
+		return nil, "", fmt.Errorf("filename must not contain slashes (got %q)", filename)
+	}
 	ext := strings.ToLower(filepath.Ext(filename))
 	if ext != ".bgcode" && ext != ".gcode" {
-		return nil, fmt.Errorf("%s is not a sliced print file (.bgcode or .gcode); slice it first", filename)
+		return nil, "", fmt.Errorf("%s is not a sliced print file (.bgcode or .gcode); slice it first", filename)
+	}
+	return st, filename, nil
+}
+
+// uploadDirect PUTs the file straight to the printer's storage.
+func (s *Server) uploadDirect(ctx context.Context, localPath, destination, filename string, overwrite, printAfter bool) (string, error) {
+	st, filename, err := checkPrintFile(localPath, filename)
+	if err != nil {
+		return "", err
+	}
+	if destination == "" {
+		destination = "/usb/"
+	}
+	target := strings.TrimRight(destination, "/") + "/" + filename
+	path, err := link.FilePath(target)
+	if err != nil {
+		return "", err
+	}
+	flag := func(b bool) string {
+		if b {
+			return "?1"
+		}
+		return "?0"
+	}
+	_, err = s.link.JSON(ctx, link.Request{
+		Method:        http.MethodPut,
+		Path:          path,
+		Body:          func() (io.ReadCloser, error) { return os.Open(localPath) },
+		ContentLength: st.Size(),
+		ContentType:   "application/octet-stream",
+		Header:        http.Header{"Overwrite": {flag(overwrite)}, "Print-After-Upload": {flag(printAfter)}},
+		Timeout:       30 * time.Minute,
+	}, nil)
+	if link.IsStatus(err, http.StatusConflict) && !overwrite {
+		return "", fmt.Errorf("%s already exists on the printer (pass overwrite=true to replace it): %w", target, err)
+	}
+	return target, err
+}
+
+// uploadViaConnect mirrors the web app: register the upload with its
+// destination, then PUT the bytes to the team's raw file endpoint. Connect
+// then copies the file to the printer on its own.
+func (s *Server) uploadViaConnect(ctx context.Context, p printerSummary, localPath, destination, filename string) (*uploadResult, error) {
+	st, filename, err := checkPrintFile(localPath, filename)
+	if err != nil {
+		return nil, err
 	}
 	if destination == "" {
 		destination, err = s.defaultStorage(ctx, p.UUID)
@@ -315,7 +465,7 @@ func (s *Server) upload(ctx context.Context, p printerSummary, localPath, destin
 	}
 
 	var created json.RawMessage
-	err = s.client.JSON(ctx, connect.Request{
+	err = s.connect.JSON(ctx, connect.Request{
 		Method: http.MethodPost,
 		Path:   "/app/users/teams/" + strconv.FormatInt(p.TeamID, 10) + "/uploads",
 		JSON: map[string]any{
@@ -337,7 +487,7 @@ func (s *Server) upload(ctx context.Context, p printerSummary, localPath, destin
 	}
 	uploadID := strings.Trim(string(meta.ID), `"`)
 
-	resp, err := s.client.Do(ctx, connect.Request{
+	resp, err := s.connect.Do(ctx, connect.Request{
 		Method: http.MethodPut,
 		Path:   "/app/teams/" + strconv.FormatInt(p.TeamID, 10) + "/files/raw",
 		Query:  url.Values{"upload_id": {uploadID}},
@@ -352,7 +502,7 @@ func (s *Server) upload(ctx context.Context, p printerSummary, localPath, destin
 	if err != nil {
 		// Don't leave a half-finished upload holding the team's quota.
 		abort := connect.Request{Method: http.MethodPost, Path: "/app/uploads/" + connect.PathEscape(uploadID) + "/abort"}
-		_ = s.client.JSON(context.WithoutCancel(ctx), abort, nil)
+		_ = s.connect.JSON(context.WithoutCancel(ctx), abort, nil)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -378,17 +528,21 @@ func (s *Server) upload(ctx context.Context, p printerSummary, localPath, destin
 func (s *Server) defaultStorage(ctx context.Context, uuid string) (string, error) {
 	var resp struct {
 		Storages []struct {
-			Path     string `json:"path"`
-			Name     string `json:"name"`
-			ReadOnly bool   `json:"read_only"`
+			Path       string `json:"path"`
+			Mountpoint string `json:"mountpoint"`
+			ReadOnly   bool   `json:"read_only"`
 		} `json:"storages"`
 	}
-	if err := s.client.Get(ctx, printerPath(uuid, "storages"), nil, &resp); err != nil {
+	if err := s.connect.Get(ctx, printerPath(uuid, "storages"), nil, &resp); err != nil {
 		return "", err
 	}
 	for _, st := range resp.Storages {
-		if st.Path != "" && !st.ReadOnly {
-			return strings.TrimRight(st.Path, "/") + "/", nil
+		path := st.Path
+		if path == "" {
+			path = st.Mountpoint
+		}
+		if path != "" && !st.ReadOnly {
+			return strings.TrimRight(path, "/") + "/", nil
 		}
 	}
 	return "", errors.New("the printer reports no writable storage (is a USB drive inserted?)")

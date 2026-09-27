@@ -6,13 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/trevin-lee/prusactl/internal/appdir"
 )
 
 // lockRefresh serializes token refreshes across processes. Prusa Account
 // rotates refresh tokens, so two MCP server processes refreshing with the same
 // token at once would leave one of them holding a revoked token.
 func lockRefresh() (unlock func(), err error) {
-	dir, err := stateDir()
+	dir, err := appdir.Dir()
 	if err != nil {
 		return nil, err
 	}

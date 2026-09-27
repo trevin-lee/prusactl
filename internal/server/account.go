@@ -12,7 +12,8 @@ import (
 // RegisterUser mirrors the Connect web app's first call after sign-in, which
 // creates the Connect user record for a Prusa Account on first use.
 func RegisterUser(ctx context.Context, c *connect.Client) error {
-	if err := c.JSON(ctx, connect.Request{Method: http.MethodPost, Path: "/app/register"}, nil); err != nil {
+	err := c.JSON(ctx, connect.Request{Method: http.MethodPost, Path: "/app/register"}, nil)
+	if err != nil && !connect.IsStatus(err, http.StatusConflict) { // 409: already registered
 		return fmt.Errorf("registering with Prusa Connect: %w", err)
 	}
 	return nil

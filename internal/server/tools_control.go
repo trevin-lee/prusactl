@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -14,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/trevin-lee/prusactl/internal/connect"
+	"github.com/trevin-lee/prusactl/internal/link"
 )
 
 // supportedCommand is one entry of /app/printers/{uuid}/supported-commands.
@@ -31,7 +34,7 @@ func (s *Server) supportedCommands(ctx context.Context, uuid string) ([]supporte
 	var resp struct {
 		Commands []supportedCommand `json:"commands"`
 	}
-	if err := s.client.Get(ctx, printerPath(uuid, "supported-commands"), nil, &resp); err != nil {
+	if err := s.connect.Get(ctx, printerPath(uuid, "supported-commands"), nil, &resp); err != nil {
 		return nil, err
 	}
 	return resp.Commands, nil
@@ -40,7 +43,7 @@ func (s *Server) supportedCommands(ctx context.Context, uuid string) ([]supporte
 // printerState reads the printer's current state as Connect reports it.
 func (s *Server) printerDetail(ctx context.Context, uuid string) (map[string]any, error) {
 	var p map[string]any
-	if err := s.client.Get(ctx, printerPath(uuid), nil, &p); err != nil {
+	if err := s.connect.Get(ctx, printerPath(uuid), nil, &p); err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -116,7 +119,7 @@ func (s *Server) runCommand(ctx context.Context, p printerSummary, command strin
 		}
 	}
 	var resp json.RawMessage
-	if err := s.client.JSON(ctx, connect.Request{Method: http.MethodPost, Path: path, Query: q, JSON: body}, &resp); err != nil {
+	if err := s.connect.JSON(ctx, connect.Request{Method: http.MethodPost, Path: path, Query: q, JSON: body}, &resp); err != nil {
 		return nil, err
 	}
 	return &commandResult{Printer: p.Name, Command: match.Command, Kwargs: kwargs, Response: resp}, nil
@@ -137,8 +140,16 @@ type sendCommandInput struct {
 
 type controlPrintInput struct {
 	printerRef
-	Action string `json:"action" jsonschema:"pause, resume, or stop"`
+	Action string `json:"action" jsonschema:"pause, resume, continue, or stop"`
 }
+
+type gcodeInput struct {
+	printerRef
+	Gcode string `json:"gcode" jsonschema:"G-code lines to run, e.g. \"G28\\nM104 S215\""`
+}
+
+// macroPath is where run_gcode puts its one-off job.
+const macroPath = "/usb/prusactl-macro.gcode"
 
 type dialogInput struct {
 	printerRef
@@ -159,7 +170,7 @@ func (s *Server) addControlTools() {
 			"leveling, file and folder management, printer-ready flags, resets, and G-code snippets from the team library.",
 		Annotations: readOnly("List printer commands"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listCommandsInput) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		p, err := s.connectPrinter(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -189,7 +200,7 @@ func (s *Server) addControlTools() {
 			"check get_printer and the camera first.",
 		Annotations: mutating("Send printer command", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sendCommandInput) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		p, err := s.connectPrinter(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -205,12 +216,12 @@ func (s *Server) addControlTools() {
 		Description: "Check the state of a command sent with send_command async=true.",
 		Annotations: readOnly("Get command status"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getCommandInput) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		p, err := s.connectPrinter(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
 		var out json.RawMessage
-		if err := s.client.Get(ctx, printerPath(p.UUID, "commands", strconv.FormatInt(in.CommandID, 10)), nil, &out); err != nil {
+		if err := s.connect.Get(ctx, printerPath(p.UUID, "commands", strconv.FormatInt(in.CommandID, 10)), nil, &out); err != nil {
 			return nil, nil, err
 		}
 		return jsonResult(out)
@@ -218,23 +229,101 @@ func (s *Server) addControlTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "control_print",
-		Description: "Pause, resume, or stop the current print. Stopping is final: the job cannot be resumed afterwards, " +
-			"and the part stays on the plate.",
+		Description: "Pause, resume, or stop the current print, or continue one the printer paused on its own " +
+			"(e.g. after a filament change). Stopping is final: the job can't be resumed and the part stays on the plate.",
 		Annotations: mutating("Pause/resume/stop print", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in controlPrintInput) (*mcp.CallToolResult, any, error) {
-		cmd := map[string]string{"pause": "PAUSE_PRINT", "resume": "RESUME_PRINT", "stop": "STOP_PRINT"}[strings.ToLower(strings.TrimSpace(in.Action))]
+		action := strings.ToLower(strings.TrimSpace(in.Action))
+		t, err := s.route(ctx, in.printerRef)
+		if err != nil {
+			return nil, nil, err
+		}
+		if t.direct {
+			var job struct {
+				ID    int64  `json:"id"`
+				State string `json:"state"`
+			}
+			found, err := s.link.Get(ctx, "/api/v1/job", &job)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !found {
+				return nil, nil, fmt.Errorf("%s has no job to %s", t.name, action)
+			}
+			id := strconv.FormatInt(job.ID, 10)
+			req := link.Request{Method: http.MethodPut, Path: "/api/v1/job/" + id + "/" + action}
+			switch action {
+			case "pause", "resume", "continue":
+			case "stop":
+				req = link.Request{Method: http.MethodDelete, Path: "/api/v1/job/" + id}
+			default:
+				return nil, nil, fmt.Errorf("action must be pause, resume, continue, or stop (got %q)", in.Action)
+			}
+			if _, err := s.link.JSON(ctx, req, nil); err != nil {
+				return nil, nil, err
+			}
+			return jsonResult(withVia(t, map[string]any{"action": action, "job_id": job.ID, "state_before": job.State}))
+		}
+		cmd := map[string]string{"pause": "PAUSE_PRINT", "resume": "RESUME_PRINT", "continue": "RESUME_PRINT", "stop": "STOP_PRINT"}[action]
 		if cmd == "" {
-			return nil, nil, fmt.Errorf("action must be pause, resume, or stop (got %q)", in.Action)
+			return nil, nil, fmt.Errorf("action must be pause, resume, continue, or stop (got %q)", in.Action)
 		}
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		res, err := s.runCommand(ctx, t.connect, cmd, nil, false, 0)
 		if err != nil {
 			return nil, nil, err
 		}
-		res, err := s.runCommand(ctx, p, cmd, nil, false, 0)
+		return jsonResult(withVia(t, map[string]any{"action": action, "result": res}))
+	})
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name: "run_gcode",
+		Description: "Run G-code on the printer over the direct connection: prusactl uploads it as a tiny print " +
+			"job (/usb/prusactl-macro.gcode) and starts it, so it only works while the printer is idle (not " +
+			"printing or paused). This is how to heat (M104/M140/M109/M190), home (G28), move (G90/G91 + G1), " +
+			"load/unload filament (M701/M702), level (G29), or send any other command when Prusa Connect isn't " +
+			"available. It shows up on the printer and in history as a short print. Moves act on real hardware: " +
+			"make sure nothing is in the way.",
+		Annotations: mutating("Run G-code", true),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in gcodeInput) (*mcp.CallToolResult, any, error) {
+		if strings.TrimSpace(in.Gcode) == "" {
+			return nil, nil, fmt.Errorf("gcode is empty")
+		}
+		in.Via = "direct"
+		t, err := s.route(ctx, in.printerRef)
+		if err != nil {
+			return nil, nil, fmt.Errorf("run_gcode needs the direct connection: %w", err)
+		}
+		var st struct {
+			Printer struct {
+				State string `json:"state"`
+			} `json:"printer"`
+		}
+		if _, err := s.link.Get(ctx, "/api/v1/status", &st); err != nil {
+			return nil, nil, err
+		}
+		switch st.Printer.State {
+		case "IDLE", "READY", "FINISHED", "STOPPED":
+		default:
+			return nil, nil, fmt.Errorf("%s is %s; G-code can only run while it is idle", t.name, st.Printer.State)
+		}
+		body := []byte("; prusactl macro\n" + strings.TrimSpace(in.Gcode) + "\n")
+		path, err := link.FilePath(macroPath)
 		if err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(res)
+		_, err = s.link.JSON(ctx, link.Request{
+			Method:        http.MethodPut,
+			Path:          path,
+			Body:          func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil },
+			ContentLength: int64(len(body)),
+			ContentType:   "application/octet-stream",
+			Header:        http.Header{"Overwrite": {"?1"}, "Print-After-Upload": {"?1"}},
+		}, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonResult(withVia(t, map[string]any{"started": macroPath, "lines": strings.Count(strings.TrimSpace(in.Gcode), "\n") + 1,
+			"next": "check get_printer until the state leaves PRINTING"}))
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
@@ -244,7 +333,7 @@ func (s *Server) addControlTools() {
 			"get_printer shows the open dialog in dialog_info with its text and buttons.",
 		Annotations: mutating("Answer printer dialog", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in dialogInput) (*mcp.CallToolResult, any, error) {
-		p, err := s.resolvePrinter(ctx, in.Printer)
+		p, err := s.connectPrinter(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
