@@ -16,6 +16,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/trevin-lee/prusactl/internal/redact"
 )
 
 // DefaultBaseURL is the production Connect origin.
@@ -58,7 +60,7 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
-	body := strings.TrimSpace(e.Body)
+	body := redact.Text(strings.TrimSpace(e.Body))
 	if len(body) > 2000 {
 		body = body[:2000] + "…"
 	}

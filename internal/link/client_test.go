@@ -167,3 +167,10 @@ func TestEnvIgnoresUnfilledPlaceholders(t *testing.T) {
 		t.Fatalf("cfg=%+v err=%v", cfg, err)
 	}
 }
+
+func TestAPIErrorMasksBody(t *testing.T) {
+	e := &APIError{Method: "GET", Path: "/api/v1/info", Status: 500, Body: `{"password": "hunter2", "title": "boom"`}
+	if msg := e.Error(); strings.Contains(msg, "hunter2") || !strings.Contains(msg, "boom") {
+		t.Fatalf("error = %s", msg)
+	}
+}

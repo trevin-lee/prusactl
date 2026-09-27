@@ -1,20 +1,19 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/trevin-lee/prusactl/internal/connect"
+	"github.com/trevin-lee/prusactl/internal/redact"
 )
 
 // summaryKeys are the Connect printer fields worth showing in a list;
@@ -25,58 +24,14 @@ var summaryKeys = []string{
 	"speed", "flow", "job_info", "dialog_info", "is_online", "last_online", "firmware",
 }
 
-// secretKey matches fields that hold credentials (PrusaLink API keys, camera
-// tokens) so they never reach the model.
-var secretKey = regexp.MustCompile(`(?i)api_?key|token|password|secret`)
-
-func redact(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		for k, val := range t {
-			if secretKey.MatchString(k) {
-				if val != nil && val != "" {
-					t[k] = "[redacted]"
-				}
-			} else {
-				t[k] = redact(val)
-			}
-		}
-	case []any:
-		for i := range t {
-			t[i] = redact(t[i])
-		}
-	}
-	return v
-}
-
-// redactRaw parses, redacts, and returns JSON; unparseable input passes through.
+// redactRaw decodes JSON with its credentials masked; input that isn't JSON
+// passes through.
 func redactRaw(raw json.RawMessage) any {
 	var v any
 	if json.Unmarshal(raw, &v) != nil {
 		return raw
 	}
-	return redact(v)
-}
-
-// RedactJSON masks credential fields in a JSON document, as the MCP tools do,
-// and reports whether it masked anything. Numbers keep their exact digits;
-// input that isn't a single JSON document comes back unchanged.
-func RedactJSON(raw []byte) ([]byte, bool) {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var v any
-	if dec.Decode(&v) != nil || dec.More() {
-		return raw, false
-	}
-	before, err := json.Marshal(v)
-	if err != nil {
-		return raw, false
-	}
-	after, err := json.Marshal(redact(v))
-	if err != nil || bytes.Equal(before, after) {
-		return raw, false
-	}
-	return after, true
+	return redact.Value(v)
 }
 
 type snapshotInput struct {

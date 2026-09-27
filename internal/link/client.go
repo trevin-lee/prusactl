@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/trevin-lee/prusactl/internal/redact"
 )
 
 // Client is a PrusaLink client.
@@ -59,7 +61,7 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	msg := fmt.Sprintf("printer: %s %s -> %d %s", e.Method, e.Path, e.Status, http.StatusText(e.Status))
-	if b := strings.TrimSpace(e.Body); b != "" {
+	if b := redact.Text(strings.TrimSpace(e.Body)); b != "" {
 		if len(b) > 1000 {
 			b = b[:1000] + "…"
 		}

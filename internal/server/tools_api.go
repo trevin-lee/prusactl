@@ -15,6 +15,7 @@ import (
 
 	"github.com/trevin-lee/prusactl/internal/connect"
 	"github.com/trevin-lee/prusactl/internal/link"
+	"github.com/trevin-lee/prusactl/internal/redact"
 )
 
 type apiInput struct {
@@ -82,9 +83,13 @@ func (s *Server) addAPITool() {
 			return nil, nil, err
 		}
 		defer resp.Body.Close()
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		const maxBody = 4 << 20
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 		if err != nil {
 			return nil, nil, err
+		}
+		if len(body) > maxBody {
+			return nil, nil, fmt.Errorf("the response is over %d MB; narrow the request (e.g. limit/offset)", maxBody>>20)
 		}
 		ct := resp.Header.Get("Content-Type")
 		switch {
@@ -95,7 +100,7 @@ func (s *Server) addAPITool() {
 		case json.Valid(body):
 			return jsonResult(map[string]any{"status": resp.StatusCode, "body": redactRaw(body)})
 		case utf8.Valid(body):
-			return jsonResult(map[string]any{"status": resp.StatusCode, "content_type": ct, "body": string(body)})
+			return jsonResult(map[string]any{"status": resp.StatusCode, "content_type": ct, "body": redact.Text(string(body))})
 		default:
 			return jsonResult(map[string]any{"status": resp.StatusCode, "content_type": ct, "bytes": len(body)})
 		}

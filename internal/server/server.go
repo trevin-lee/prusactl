@@ -17,6 +17,7 @@ import (
 	"github.com/trevin-lee/prusactl/internal/auth"
 	"github.com/trevin-lee/prusactl/internal/connect"
 	"github.com/trevin-lee/prusactl/internal/link"
+	"github.com/trevin-lee/prusactl/internal/redact"
 )
 
 const instructions = `Controls the user's Prusa 3D printer.
@@ -81,11 +82,16 @@ func jsonResult(v any) (*mcp.CallToolResult, any, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// Every tool result is masked here, so a tool that passes Connect's JSON
+	// through can't leak the printer's API keys or camera tokens.
+	if masked, changed := redact.JSON(b); changed {
+		b = masked
+	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}, nil, nil
 }
 
 func textResult(format string, args ...any) (*mcp.CallToolResult, any, error) {
-	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(format, args...)}}}, nil, nil
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: redact.Text(fmt.Sprintf(format, args...))}}}, nil, nil
 }
 
 // printerRef is embedded in every per-printer tool input.

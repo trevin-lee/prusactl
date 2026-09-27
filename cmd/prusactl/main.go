@@ -26,6 +26,7 @@ import (
 	"github.com/trevin-lee/prusactl/internal/auth"
 	"github.com/trevin-lee/prusactl/internal/connect"
 	"github.com/trevin-lee/prusactl/internal/link"
+	"github.com/trevin-lee/prusactl/internal/redact"
 	"github.com/trevin-lee/prusactl/internal/secret"
 	"github.com/trevin-lee/prusactl/internal/server"
 )
@@ -394,7 +395,12 @@ func apiCommand(ctx context.Context, cc *connect.Client, lc *link.Client, lcErr 
 	}
 	redacted := false
 	if !raw {
-		out, redacted = server.RedactJSON(out)
+		if masked, changed := redact.JSON(out); changed {
+			out, redacted = masked, true
+		} else if !json.Valid(out) {
+			masked := redact.Text(string(out))
+			out, redacted = []byte(masked), masked != string(out)
+		}
 	}
 	var pretty bytes.Buffer
 	if json.Indent(&pretty, out, "", "  ") == nil {
