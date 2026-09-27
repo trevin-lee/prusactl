@@ -57,6 +57,8 @@ func TestFileBackend(t *testing.T) {
 
 func TestFallsBackWhenKeychainUnavailable(t *testing.T) {
 	useTempFile(t)
+	goos = "linux"
+	t.Cleanup(func() { goos = runtime.GOOS })
 	keyring.MockInitWithError(errors.New("exec: \"dbus-launch\": executable file not found in $PATH"))
 	t.Cleanup(keyring.MockInit)
 	warned = true // keep test output quiet
@@ -95,4 +97,25 @@ func TestKeychainPreferredAndFileCopyCleared(t *testing.T) {
 	if _, err := fileGet("printer"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("the file copy should be gone: %v", err)
 	}
+}
+
+func TestRefusedKeychainIsAnErrorNotAFallback(t *testing.T) {
+	path := useTempFile(t)
+	for _, tc := range []struct{ goos, msg string }{
+		{"darwin", "User canceled the operation."},
+		{"windows", "The stub received bad data."},
+		{"linux", "failed to unlock correct collection '/org/freedesktop/secrets/aliases/default'"},
+		{"darwin", `exec: "security": executable file not found in $PATH`}, // macOS always has a keychain
+	} {
+		goos = tc.goos
+		keyring.MockInitWithError(errors.New(tc.msg))
+		if err := Set("printer", "hunter2"); err == nil {
+			t.Errorf("%s %q: Set succeeded; the secret should not have gone to a file", tc.goos, tc.msg)
+		}
+		if _, err := os.Stat(path); err == nil {
+			t.Fatalf("%s %q: wrote %s", tc.goos, tc.msg, path)
+		}
+	}
+	goos = runtime.GOOS
+	keyring.MockInit()
 }

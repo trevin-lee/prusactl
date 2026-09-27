@@ -259,8 +259,10 @@ func status(ctx context.Context, srv *server.Server, lc *link.Client) error {
 			if p, ok := s.Job["progress"]; ok {
 				line += fmt.Sprintf(" %v%%", p)
 			}
-			line += fmt.Sprintf(", nozzle %v/%v°C, bed %v/%v°C",
-				s.Printer["temp_nozzle"], s.Printer["target_nozzle"], s.Printer["temp_bed"], s.Printer["target_bed"])
+			if _, ok := s.Printer["temp_nozzle"]; ok {
+				line += fmt.Sprintf(", nozzle %s/%s°C, bed %s/%s°C", num(s.Printer["temp_nozzle"]),
+					num(s.Printer["target_nozzle"]), num(s.Printer["temp_bed"]), num(s.Printer["target_bed"]))
+			}
 		}
 		fmt.Printf("Printer (direct):  %s: %s\n", direct["host"], line)
 	case direct["configured"] == true:
@@ -432,4 +434,12 @@ func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 		pos = append(pos, args[0])
 		args = args[1:]
 	}
+}
+
+// num formats a reading from the printer, or "?" when it didn't send one.
+func num(v any) string {
+	if v == nil {
+		return "?"
+	}
+	return fmt.Sprint(v)
 }

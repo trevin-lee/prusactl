@@ -15,6 +15,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -46,10 +48,26 @@ func forceFile() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("PRUSACTL_KEYRING")), "file")
 }
 
-// unavailable reports whether a keychain error means there is no usable
-// credential store, as opposed to a problem with this particular item.
+// goos is replaced in tests.
+var goos = runtime.GOOS
+
+// noBackend matches the errors go-keyring gives on Linux and BSD when there is
+// no Secret Service at all: no D-Bus session, no dbus-launch, or nothing
+// providing org.freedesktop.secrets.
+var noBackend = regexp.MustCompile(`(?i)dbus|org\.freedesktop\.secrets|ServiceUnknown|session bus|executable file not found`)
+
+// unavailable reports whether a keychain error means this machine has no
+// credential store. It is deliberately narrow: a keychain that exists but
+// refused (the user clicked Deny, or it is locked) must surface as an error,
+// not quietly send the secret to a file. macOS and Windows always have one.
 func unavailable(err error) bool {
-	return err != nil && !errors.Is(err, keyring.ErrNotFound) && !errors.Is(err, keyring.ErrSetDataTooBig)
+	if err == nil || errors.Is(err, keyring.ErrNotFound) || errors.Is(err, keyring.ErrSetDataTooBig) {
+		return false
+	}
+	if goos == "darwin" || goos == "windows" {
+		return false
+	}
+	return noBackend.MatchString(err.Error())
 }
 
 // Get returns the secret stored under account, or ErrNotFound.
