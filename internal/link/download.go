@@ -2,6 +2,7 @@ package link
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,10 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrExists means Download's destination already exists and overwrite wasn't
+// set. Download returns the destination path along with it.
+var ErrExists = errors.New("the destination file already exists")
 
 // Download copies a file from the printer's storage to dest on this computer.
 // dest may be a folder (the file keeps its long name from the printer), a file
@@ -56,7 +61,7 @@ func (c *Client) Download(ctx context.Context, printerPath, dest string, overwri
 	}
 	if !overwrite {
 		if _, err := os.Stat(target); err == nil {
-			return "", 0, fmt.Errorf("%s already exists (pass overwrite to replace it)", target)
+			return target, 0, ErrExists
 		}
 	}
 

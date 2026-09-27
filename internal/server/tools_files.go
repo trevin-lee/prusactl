@@ -207,6 +207,9 @@ func (s *Server) addFileTools() {
 			return nil, nil, err
 		}
 		path, n, err := s.link.Download(ctx, in.Path, in.LocalPath, in.Overwrite)
+		if errors.Is(err, link.ErrExists) {
+			return nil, nil, fmt.Errorf("%s already exists; set overwrite to replace it", path)
+		}
 		if err != nil {
 			return nil, nil, err
 		}

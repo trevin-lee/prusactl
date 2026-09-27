@@ -26,6 +26,7 @@ import (
 	"github.com/trevin-lee/prusactl/internal/auth"
 	"github.com/trevin-lee/prusactl/internal/connect"
 	"github.com/trevin-lee/prusactl/internal/link"
+	"github.com/trevin-lee/prusactl/internal/secret"
 	"github.com/trevin-lee/prusactl/internal/server"
 )
 
@@ -85,7 +86,7 @@ func run(ctx context.Context, args []string) error {
 		if err := session.Logout(); err != nil {
 			return err
 		}
-		fmt.Println("Signed out of Prusa Connect; the session was removed from the keychain.")
+		fmt.Println("Signed out of Prusa Connect; the saved session was removed.")
 		return nil
 	case "status":
 		return status(ctx, server.New(session, cc, lc, lcErr, buildVersion()), lc)
@@ -134,8 +135,12 @@ func setup(ctx context.Context, args []string) error {
 	apiKey := fs.Bool("api-key", false, "authenticate with a PrusaLink API key instead of the password")
 	fromStdin := fs.Bool("password-stdin", false, "read the password or API key from stdin")
 	forget := fs.Bool("forget", false, "remove the saved printer and its password")
-	if err := fs.Parse(args); err != nil {
+	pos, err := parseFlags(fs, args)
+	if err != nil {
 		return err
+	}
+	if len(pos) > 1 {
+		return errors.New("setup: usage: prusactl setup [flags] [ADDRESS]")
 	}
 	if *forget {
 		cfg, err := link.LoadConfig()
@@ -153,7 +158,10 @@ func setup(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	address := fs.Arg(0)
+	address := ""
+	if len(pos) == 1 {
+		address = pos[0]
+	}
 	if address == "" {
 		var err error
 		if address, err = ask("Printer address (IP or hostname; on the printer: Settings > Network): "); err != nil {
@@ -170,17 +178,17 @@ func setup(ctx context.Context, args []string) error {
 		cfg.Auth, what = link.AuthAPIKey, "PrusaLink API key"
 	}
 
-	var secret string
+	var pass string
 	if *fromStdin {
 		b, err := io.ReadAll(io.LimitReader(os.Stdin, 4096))
 		if err != nil {
 			return err
 		}
-		secret = strings.TrimSpace(string(b))
-	} else if secret, err = askSecret(what + ": "); err != nil {
+		pass = strings.TrimSpace(string(b))
+	} else if pass, err = askSecret(what + ": "); err != nil {
 		return err
 	}
-	if secret == "" {
+	if pass == "" {
 		return errors.New("empty password")
 	}
 
@@ -189,11 +197,11 @@ func setup(ctx context.Context, args []string) error {
 	var info struct {
 		Name, Hostname, Serial string
 	}
-	if _, err := link.New(cfg, secret).Get(vctx, "/api/v1/info", &info); err != nil {
+	if _, err := link.New(cfg, pass).Get(vctx, "/api/v1/info", &info); err != nil {
 		return fmt.Errorf("checking the printer: %w", err)
 	}
-	if err := cfg.SaveSecret(secret); err != nil {
-		return fmt.Errorf("saving the password to the keychain: %w", err)
+	if err := cfg.SaveSecret(pass); err != nil {
+		return fmt.Errorf("saving the printer's secret: %w", err)
 	}
 	if err := link.SaveConfig(cfg); err != nil {
 		return err
@@ -202,7 +210,11 @@ func setup(ctx context.Context, args []string) error {
 	if name == "" {
 		name = info.Hostname
 	}
-	fmt.Printf("Connected to %s at %s. The password is saved in your keychain.\n", name, host)
+	kind := "password"
+	if *apiKey {
+		kind = "API key"
+	}
+	fmt.Printf("Connected to %s at %s. The %s is saved in %s.\n", name, host, kind, secret.Where())
 	return nil
 }
 
@@ -225,7 +237,7 @@ func login(ctx context.Context, session *auth.Session, cc *connect.Client, lc *l
 	if err := server.RegisterUser(ctx, cc); err != nil {
 		fmt.Fprintln(os.Stderr, "warning:", err)
 	}
-	fmt.Println("Signed in. The session is saved in your keychain and renews itself.")
+	fmt.Printf("Signed in. The session is saved in %s and renews itself.\n", secret.Where())
 	return status(ctx, server.New(session, cc, lc, lcErr, buildVersion()), lc)
 }
 
@@ -291,16 +303,24 @@ func orText(a, b any) any {
 func download(ctx context.Context, lc *link.Client, lcErr error, args []string) error {
 	fs := flag.NewFlagSet("download", flag.ContinueOnError)
 	overwrite := fs.Bool("overwrite", false, "replace DEST if it already exists")
-	if err := fs.Parse(args); err != nil {
+	pos, err := parseFlags(fs, args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() == 0 || fs.NArg() > 2 {
+	if len(pos) == 0 || len(pos) > 2 {
 		return errors.New("download: usage: prusactl download [--overwrite] PATH [DEST], e.g. /usb/part.bgcode")
 	}
 	if lc == nil {
 		return lcErr
 	}
-	path, n, err := lc.Download(ctx, fs.Arg(0), fs.Arg(1), *overwrite)
+	dest := ""
+	if len(pos) == 2 {
+		dest = pos[1]
+	}
+	path, n, err := lc.Download(ctx, pos[0], dest, *overwrite)
+	if errors.Is(err, link.ErrExists) {
+		return fmt.Errorf("%s already exists (add --overwrite to replace it)", path)
+	}
 	if err != nil {
 		return err
 	}
@@ -389,4 +409,21 @@ func apiCommand(ctx context.Context, cc *connect.Client, lc *link.Client, lcErr 
 		fmt.Fprintln(os.Stderr, "(API keys and tokens shown as [redacted]; add --raw to see them)")
 	}
 	return nil
+}
+
+// parseFlags parses fs from args and returns the positional arguments. Unlike
+// fs.Parse, it also accepts flags after them, as in `setup 10.0.0.5 --api-key`.
+func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		args = fs.Args()
+		if len(args) == 0 {
+			return pos, nil
+		}
+		pos = append(pos, args[0])
+		args = args[1:]
+	}
 }
