@@ -320,7 +320,10 @@ func (s *Server) addControlTools() {
 		default:
 			return nil, nil, fmt.Errorf("%s is %s; G-code can only run while it is idle", t.name, st.Printer.State)
 		}
-		body := []byte("; prusactl macro\n" + strings.TrimSpace(in.Gcode) + "\n")
+		// Without this header line Buddy firmware asks, on the printer's screen, whether a
+		// file not sliced with input shaping should run, and waits there. Slicer output
+		// always carries it.
+		body := []byte("; prusactl macro\nM862.6 P\"Input shaper\" ; FW feature check\n" + strings.TrimSpace(in.Gcode) + "\n")
 		path, err := link.FilePath(macroPath)
 		if err != nil {
 			return nil, nil, err
