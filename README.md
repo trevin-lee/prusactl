@@ -112,6 +112,7 @@ The printer's PrusaLink password is kept in the same keychain.
 | `connection_status` | both | How the printer can be reached right now, and what to set up |
 | `list_printers`, `get_printer` | both | State, temperatures, job progress, and (via Connect) any dialog on screen |
 | `list_printer_files`, `delete_printer_files` | both | Browse or clean up the printer's storage |
+| `download_printer_file` | direct | Copy a file from the printer to this computer, e.g. to check the slicer settings a print used |
 | `upload_file` | both | Send a local `.bgcode`/`.gcode` to the printer, and optionally start or queue it |
 | `start_print` | both | Print a file already on the printer |
 | `control_print` | both | Pause, resume, continue, or stop |
@@ -137,6 +138,7 @@ prusactl login                     optional: sign in to Prusa Connect
 prusactl logout                    forget the Prusa Connect session
 prusactl status                    printer state and how it is reachable
 prusactl mcp                       run the MCP server on stdio
+prusactl download PATH [DEST]      copy a file from the printer to this computer
 prusactl api [METHOD] PATH [JSON]  /api/... to the printer, /app/... to Prusa Connect
 ```
 

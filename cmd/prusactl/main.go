@@ -50,6 +50,8 @@ Usage:
   prusactl logout                    forget the Prusa Connect session
   prusactl status                    printer state and how it is reachable
   prusactl mcp                       run the MCP server on stdio
+  prusactl download PATH [DEST]      copy a file from the printer's storage to this
+                                     computer, e.g. /usb/part.bgcode
   prusactl api [METHOD] PATH [JSON]  call an API directly: /api/... goes to the
                                      printer, /app/... to Prusa Connect
   prusactl version
@@ -88,6 +90,8 @@ func run(ctx context.Context, args []string) error {
 		return status(ctx, server.New(session, cc, lc, lcErr, buildVersion()), lc)
 	case "mcp":
 		return server.New(session, cc, lc, lcErr, buildVersion()).Run(ctx)
+	case "download":
+		return download(ctx, lc, lcErr, args[1:])
 	case "api":
 		return apiCommand(ctx, cc, lc, lcErr, args[1:])
 	case "version":
@@ -281,6 +285,26 @@ func orText(a, b any) any {
 		return a
 	}
 	return b
+}
+
+func download(ctx context.Context, lc *link.Client, lcErr error, args []string) error {
+	fs := flag.NewFlagSet("download", flag.ContinueOnError)
+	overwrite := fs.Bool("overwrite", false, "replace DEST if it already exists")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() == 0 || fs.NArg() > 2 {
+		return errors.New("download: usage: prusactl download [--overwrite] PATH [DEST], e.g. /usb/part.bgcode")
+	}
+	if lc == nil {
+		return lcErr
+	}
+	path, n, err := lc.Download(ctx, fs.Arg(0), fs.Arg(1), *overwrite)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Saved %s (%d bytes).\n", path, n)
+	return nil
 }
 
 func apiCommand(ctx context.Context, cc *connect.Client, lc *link.Client, lcErr error, args []string) error {

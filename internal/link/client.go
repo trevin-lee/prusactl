@@ -161,7 +161,9 @@ func (c *Client) send(ctx context.Context, req Request) (*http.Response, error) 
 	if req.ContentType != "" {
 		hr.Header.Set("Content-Type", req.ContentType)
 	}
-	hr.Header.Set("Accept", "application/json")
+	if hr.Header.Get("Accept") == "" {
+		hr.Header.Set("Accept", "application/json")
+	}
 	switch {
 	case c.Config.Auth == AuthAPIKey:
 		hr.Header.Set("X-Api-Key", c.secret)

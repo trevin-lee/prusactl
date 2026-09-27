@@ -36,6 +36,13 @@ type uploadInput struct {
 	Overwrite   bool   `json:"overwrite,omitempty" jsonschema:"replace a file with the same name on the printer (direct route)"`
 }
 
+type downloadInput struct {
+	printerRef
+	Path      string `json:"path" jsonschema:"file on the printer, e.g. /usb/part.bgcode"`
+	LocalPath string `json:"local_path" jsonschema:"absolute path on this computer: a folder (the file keeps its name) or a file name"`
+	Overwrite bool   `json:"overwrite,omitempty" jsonschema:"replace an existing local file"`
+}
+
 type queueInput struct {
 	printerRef
 	Path      string `json:"path,omitempty" jsonschema:"file already on the printer, e.g. /usb/part.bgcode"`
@@ -183,6 +190,27 @@ func (s *Server) addFileTools() {
 			out["queued"] = queued
 		}
 		return jsonResult(out)
+	})
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name: "download_printer_file",
+		Description: "Copy a file from the printer's storage to this computer, e.g. to inspect the G-code or the " +
+			"slicer settings a finished print used. Direct route only: Prusa Connect can't read files off the printer.",
+		Annotations: mutating("Download printer file", false),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in downloadInput) (*mcp.CallToolResult, any, error) {
+		if !filepath.IsAbs(in.LocalPath) {
+			return nil, nil, fmt.Errorf("local_path must be absolute (got %q)", in.LocalPath)
+		}
+		in.Via = "direct"
+		t, err := s.route(ctx, in.printerRef)
+		if err != nil {
+			return nil, nil, err
+		}
+		path, n, err := s.link.Download(ctx, in.Path, in.LocalPath, in.Overwrite)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonResult(withVia(t, map[string]any{"saved": path, "bytes": n}))
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{

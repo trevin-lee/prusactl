@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -40,6 +42,10 @@ func fakePrinter(t *testing.T, onUpload func(body string)) (*httptest.Server, *i
 			w.WriteHeader(http.StatusCreated)
 		case r.URL.Path == "/api/v1/job":
 			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/api/v1/files/usb/long name.bgcode":
+			_, _ = w.Write([]byte(`{"name":"LONGNA~1.BGC","display_name":"long name.bgcode","type":"PRINT_FILE","refs":{"download":"/usb/LONGNA~1.BGC"}}`))
+		case r.URL.Path == "/usb/LONGNA~1.BGC" && r.Header.Get("Accept") != "application/json":
+			_, _ = w.Write([]byte("GCDE\x01"))
 		default:
 			_, _ = w.Write([]byte(`{"name":"Core One","serial":"SN1"}`))
 		}
@@ -80,6 +86,40 @@ func TestUploadIsSentOnce(t *testing.T) {
 	}
 	if *uploads != 1 || got[0] != "G28\n" {
 		t.Fatalf("uploads=%d bodies=%q", *uploads, got)
+	}
+}
+
+func TestDownloadKeepsNameAndRefusesOverwrite(t *testing.T) {
+	srv, _ := fakePrinter(t, nil)
+	defer srv.Close()
+	c := New(Config{Host: srv.URL, User: "maker", Auth: AuthDigest}, "secret")
+	dir := t.TempDir()
+	path, n, err := c.Download(context.Background(), "/usb/long name.bgcode", dir, false)
+	if err != nil || path != filepath.Join(dir, "long name.bgcode") || n != 5 {
+		t.Fatalf("path=%q n=%d err=%v", path, n, err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "GCDE\x01" {
+		t.Fatalf("content %q", b)
+	}
+	if _, _, err := c.Download(context.Background(), "/usb/long name.bgcode", dir, false); err == nil {
+		t.Fatal("replaced an existing file without overwrite")
+	}
+	if _, _, err := c.Download(context.Background(), "/usb/long name.bgcode", path, true); err != nil {
+		t.Fatalf("overwrite: %v", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, ".prusactl-download-*")); len(left) > 0 {
+		t.Fatalf("temp files left behind: %q", left)
+	}
+}
+
+func TestDownloadPathStaysOnStorage(t *testing.T) {
+	for _, ref := range []string{"usb/a", "/usb/../etc", "/usb//a", "http://evil/usb/a"} {
+		if _, err := downloadPath(ref); err == nil {
+			t.Errorf("%q: accepted", ref)
+		}
+	}
+	if got, err := downloadPath("/usb/a b~1.BGC"); err != nil || got != "/usb/a%20b~1.BGC" {
+		t.Errorf("got %q, %v", got, err)
 	}
 }
 
