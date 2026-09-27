@@ -147,7 +147,9 @@ func (s *Server) addFileTools() {
 		Description: "Upload a sliced print file (.bgcode/.gcode) from this computer to the printer, optionally " +
 			"starting it (then=print) or adding it to the Prusa Connect queue (then=queue). Directly on the local " +
 			"network the file goes straight to the printer; through Connect it is stored in Connect and copied to the " +
-			"printer in the background (get_transfers shows progress). Before then=print, confirm the plate is clear.",
+			"printer in the background (get_transfers shows progress); there then=print puts it first in the queue and " +
+			"marks the printer ready, and Connect starts it once the file arrives. then=print is refused unless the " +
+			"printer is idle. Before then=print, confirm the plate is clear.",
 		Annotations: mutating("Upload print file", false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in uploadInput) (*mcp.CallToolResult, any, error) {
 		then := strings.ToLower(strings.TrimSpace(in.Then))
@@ -164,12 +166,24 @@ func (s *Server) addFileTools() {
 		if err != nil {
 			return nil, nil, err
 		}
+		if then == "print" {
+			// Check before a possibly long upload, not after.
+			if err := s.readyToStart(ctx, t); err != nil {
+				return nil, nil, err
+			}
+		}
 		if t.direct {
 			path, err := s.uploadDirect(ctx, in.LocalPath, in.Destination, in.Filename, in.Overwrite, then == "print")
 			if err != nil {
 				return nil, nil, err
 			}
-			return jsonResult(withVia(t, map[string]any{"uploaded": path, "printing": then == "print"}))
+			out := map[string]any{"uploaded": path, "printing": false}
+			if then == "print" {
+				for k, v := range startReport(s.startedState(ctx, t)) {
+					out[k] = v
+				}
+			}
+			return jsonResult(withVia(t, out))
 		}
 		p := t.connect
 		res, err := s.uploadViaConnect(ctx, p, in.LocalPath, in.Destination, in.Filename)
@@ -188,6 +202,13 @@ func (s *Server) addFileTools() {
 				return nil, nil, fmt.Errorf("uploaded (hash %s) but queueing failed: %w", res.Hash, err)
 			}
 			out["queued"] = queued
+			if then == "print" {
+				// Through Connect, "print" means first in the queue with the
+				// printer marked ready; Connect starts it once the file has been
+				// copied over and the printer checks in.
+				out["printing"] = false
+				out["note"] = "queued first and the printer marked ready; Connect starts it when the file reaches the printer (get_transfers, get_printer)"
+			}
 		}
 		return jsonResult(out)
 	})
@@ -226,6 +247,9 @@ func (s *Server) addFileTools() {
 		if err != nil {
 			return nil, nil, err
 		}
+		if err := s.readyToStart(ctx, t); err != nil {
+			return nil, nil, err
+		}
 		if t.direct {
 			path, err := link.FilePath(in.Path)
 			if err != nil {
@@ -234,7 +258,9 @@ func (s *Server) addFileTools() {
 			if _, err := s.link.JSON(ctx, link.Request{Method: http.MethodPost, Path: path}, nil); err != nil {
 				return nil, nil, err
 			}
-			return jsonResult(withVia(t, map[string]any{"started": in.Path}))
+			out := startReport(s.startedState(ctx, t))
+			out["started"] = in.Path
+			return jsonResult(withVia(t, out))
 		}
 		res, err := s.runCommand(ctx, t.connect, "START_PRINT", map[string]any{"path": in.Path}, false, 0)
 		if err != nil {
