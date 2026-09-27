@@ -140,7 +140,7 @@ type sendCommandInput struct {
 
 type controlPrintInput struct {
 	printerRef
-	Action string `json:"action" jsonschema:"pause, resume, continue, or stop"`
+	Action string `json:"action" jsonschema:"pause, resume, or stop"`
 }
 
 type gcodeInput struct {
@@ -233,8 +233,9 @@ func (s *Server) addControlTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "control_print",
-		Description: "Pause, resume, or stop the current print, or continue one the printer paused on its own " +
-			"(e.g. after a filament change). Stopping is final: the job can't be resumed and the part stays on the plate.",
+		Description: "Pause, resume, or stop the current print. A question on the printer's screen (state ATTENTION) " +
+			"can't be answered this way; use respond_to_dialog through Prusa Connect. Stopping is final: the job can't " +
+			"be resumed and the part stays on the plate.",
 		Annotations: mutating("Pause/resume/stop print", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in controlPrintInput) (*mcp.CallToolResult, any, error) {
 		action := strings.ToLower(strings.TrimSpace(in.Action))
@@ -255,9 +256,18 @@ func (s *Server) addControlTools() {
 				return nil, nil, fmt.Errorf("%s has no job to %s", t.name, action)
 			}
 			id := strconv.FormatInt(job.ID, 10)
-			req := link.Request{Method: http.MethodPut, Path: "/api/v1/job/" + id + "/" + action}
+			// Buddy firmware's PrusaLink implements pause, resume (from PAUSED only)
+			// and stop; "continue" from the published spec is answered with 400.
+			cmd := action
+			if cmd == "continue" {
+				cmd = "resume"
+			}
+			req := link.Request{Method: http.MethodPut, Path: "/api/v1/job/" + id + "/" + cmd}
 			switch action {
 			case "pause", "resume", "continue":
+				if job.State == "ATTENTION" || (action != "pause" && job.State != "PAUSED") {
+					return nil, nil, fmt.Errorf("%s's job is %s; the printer only resumes from PAUSED over the local network. A question on its screen must be answered there, or through Prusa Connect (respond_to_dialog)", t.name, job.State)
+				}
 			case "stop":
 				req = link.Request{Method: http.MethodDelete, Path: "/api/v1/job/" + id}
 			default:
