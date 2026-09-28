@@ -23,8 +23,8 @@ import (
 type listFilesInput struct {
 	printerRef
 	Path   string `json:"path,omitempty" jsonschema:"folder on the printer, e.g. /usb or /usb/parts; omit to list the printer's storages"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"default 50"`
-	Offset int    `json:"offset,omitempty"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"how many entries to return; default 50, at most 500"`
+	Offset int    `json:"offset,omitempty" jsonschema:"entries to skip, for the next page (see next_offset)"`
 }
 
 type uploadInput struct {
@@ -97,7 +97,7 @@ func (s *Server) addFileTools() {
 				_, err = s.direct().Get(ctx, path, &out)
 			}
 			if err == nil {
-				out = compactFolder(dir, out)
+				out = compactFolder(dir, out, in.Limit, in.Offset)
 			}
 		case dir == "":
 			err = s.connect.Get(ctx, printerPath(t.connect.UUID, "storages"), nil, &out)
@@ -408,7 +408,9 @@ type uploadResult struct {
 // compactFolder trims a PrusaLink folder listing to what an agent needs:
 // each entry's full path (the printer's short 8.3 name, which is what
 // start_print and delete take), display name, type, and times.
-func compactFolder(dir string, raw json.RawMessage) json.RawMessage {
+// compactFolder turns PrusaLink's folder listing into one page of entries,
+// with the total and, when there is more, the offset of the next page.
+func compactFolder(dir string, raw json.RawMessage, limit, offset int) json.RawMessage {
 	var folder struct {
 		Name     string `json:"name"`
 		Children []struct {
@@ -424,8 +426,17 @@ func compactFolder(dir string, raw json.RawMessage) json.RawMessage {
 		return raw
 	}
 	base := "/" + strings.Trim(dir, "/") + "/"
-	entries := make([]map[string]any, 0, len(folder.Children))
-	for _, c := range folder.Children {
+	total := len(folder.Children)
+	switch {
+	case limit <= 0:
+		limit = 50
+	case limit > 500:
+		limit = 500
+	}
+	offset = min(max(offset, 0), total)
+	page := folder.Children[offset:min(offset+limit, total)]
+	entries := make([]map[string]any, 0, len(page))
+	for _, c := range page {
 		e := map[string]any{"path": base + c.Name, "name": c.DisplayName, "type": c.Type}
 		if c.DisplayName == "" {
 			e["name"] = c.Name
@@ -441,7 +452,11 @@ func compactFolder(dir string, raw json.RawMessage) json.RawMessage {
 		}
 		entries = append(entries, e)
 	}
-	b, err := json.Marshal(map[string]any{"folder": base, "entries": entries})
+	res := map[string]any{"folder": base, "entries": entries, "total": total}
+	if next := offset + len(page); next < total {
+		res["next_offset"] = next
+	}
+	b, err := json.Marshal(res)
 	if err != nil {
 		return raw
 	}

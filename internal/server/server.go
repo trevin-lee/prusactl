@@ -81,6 +81,9 @@ func mutating(title string, destructive bool) *mcp.ToolAnnotations {
 	return &mcp.ToolAnnotations{Title: title, DestructiveHint: &destructive}
 }
 
+// maxResult caps a tool result's size.
+const maxResult = 256 << 10
+
 // jsonResult returns v as compact JSON text.
 func jsonResult(v any) (*mcp.CallToolResult, any, error) {
 	b, err := json.Marshal(v)
@@ -91,6 +94,11 @@ func jsonResult(v any) (*mcp.CallToolResult, any, error) {
 	// through can't leak the printer's API keys or camera tokens.
 	if masked, changed := redact.JSON(b); changed {
 		b = masked
+	}
+	// A model can't use a result this large, and it would crowd out the
+	// conversation; say how to narrow it instead.
+	if len(b) > maxResult {
+		return nil, nil, fmt.Errorf("the result is %d KB, over the %d KB limit; narrow it (a smaller limit, an offset, or a more specific path)", len(b)>>10, maxResult>>10)
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}, nil, nil
 }
