@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- When Prusa changes an API, prusactl says so plainly instead of misbehaving:
+  "Prusa Connect answered in a way prusactl doesn't recognize: …", naming the
+  request and what was unexpected, with what to do. It covers removed Connect
+  endpoints, changed response formats and missing fields (a renamed printer
+  list no longer reads as "no printers"), Prusa Account sign-in and token
+  changes, and firmware changes to the printer's local API.
+- A rejected sign-in app ID no longer deletes the saved session.
+
 ## 0.1.2 (2026-09-28)
 
 - The plate check applies to every tool that starts a job or moves the printer:

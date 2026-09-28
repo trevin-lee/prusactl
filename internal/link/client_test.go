@@ -2,6 +2,7 @@ package link
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/trevin-lee/prusactl/internal/compat"
 )
 
 // fakePrinter checks Digest auth the way PrusaLink does (MD5, qop=auth).
@@ -172,5 +175,30 @@ func TestAPIErrorMasksBody(t *testing.T) {
 	e := &APIError{Method: "GET", Path: "/api/v1/info", Status: 500, Body: `{"password": "hunter2", "title": "boom"`}
 	if msg := e.Error(); strings.Contains(msg, "hunter2") || !strings.Contains(msg, "boom") {
 		t.Fatalf("error = %s", msg)
+	}
+}
+
+func TestFirmwareAPIChangeIsReported(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/info":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `["not", "an", "object"]`)
+		default: // a moved endpoint and a missing file look the same here
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"title": "404: Not Found","message":""}`)
+		}
+	}))
+	defer srv.Close()
+	c := New(Config{Host: srv.URL, Auth: AuthAPIKey}, "k")
+	var v struct{ Hostname string }
+	if _, err := c.Get(context.Background(), "/api/v1/status", &v); !compat.Is(err) {
+		t.Errorf("missing /api/v1/status: %v", err)
+	}
+	if _, err := c.Get(context.Background(), "/api/v1/info", &v); !compat.Is(err) {
+		t.Errorf("changed /api/v1/info format: %v", err)
+	}
+	if _, err := c.Get(context.Background(), "/api/v1/files/usb/missing.bgcode", &v); err == nil || compat.Is(err) {
+		t.Errorf("a missing file is a normal error: %v", err)
 	}
 }

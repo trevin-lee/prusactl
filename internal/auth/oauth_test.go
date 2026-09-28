@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"github.com/trevin-lee/prusactl/internal/compat"
+
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -175,5 +177,34 @@ func TestRejectedRefreshKeepsANewerSession(t *testing.T) {
 	}
 	if stored, err := store.Load(); err != nil || stored.RefreshToken != "newer" {
 		t.Fatalf("stored session = %+v, %v; the new login was lost", stored, err)
+	}
+}
+
+func TestRejectedAppIDIsAnAPIChangeAndKeepsTheSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		_, _ = w.Write([]byte(`{"error":"invalid_client"}`))
+	}))
+	defer srv.Close()
+	store := &memStore{tok: &Token{RefreshToken: "r1"}}
+	s := &Session{Config: Config{AccountURL: srv.URL, ClientID: "cid", HTTP: srv.Client()}, Store: store}
+	_, err := s.AccessToken(context.Background())
+	if !compat.Is(err) {
+		t.Fatalf("want the API-change error, got %v", err)
+	}
+	if stored, _ := store.Load(); stored == nil || stored.RefreshToken != "r1" {
+		t.Fatal("the saved session was thrown away")
+	}
+}
+
+func TestTokenResponseWithoutAccessTokenIsAnAPIChange(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"token": "renamed", "refresh_token": "r2"}`))
+	}))
+	defer srv.Close()
+	c := Config{AccountURL: srv.URL, ClientID: "cid", HTTP: srv.Client()}
+	if _, err := c.Refresh(context.Background(), "r1"); !compat.Is(err) {
+		t.Fatalf("want the API-change error, got %v", err)
 	}
 }

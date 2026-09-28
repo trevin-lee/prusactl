@@ -558,7 +558,7 @@ func (s *Server) uploadViaConnect(ctx context.Context, p printerSummary, localPa
 		Hash string          `json:"hash"`
 	}
 	if err := json.Unmarshal(created, &meta); err != nil || len(meta.ID) == 0 {
-		return nil, fmt.Errorf("Connect did not return an upload id: %s", created)
+		return nil, connect.Missing("POST", "/app/users/teams/{team}/uploads", "id")
 	}
 	uploadID := strings.Trim(string(meta.ID), `"`)
 
@@ -592,6 +592,11 @@ func (s *Server) uploadViaConnect(ctx context.Context, p printerSummary, localPa
 	hash := file.Hash
 	if hash == "" {
 		hash = meta.Hash
+	}
+	if hash == "" {
+		// The file is in Connect, but without its hash it can't be queued or
+		// found again.
+		return nil, connect.Missing("PUT", "/app/teams/{team}/files/raw", "hash")
 	}
 	if !json.Valid(fileJSON) {
 		fileJSON = nil

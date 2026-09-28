@@ -24,6 +24,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/trevin-lee/prusactl/internal/auth"
+	"github.com/trevin-lee/prusactl/internal/compat"
 	"github.com/trevin-lee/prusactl/internal/connect"
 	"github.com/trevin-lee/prusactl/internal/link"
 	"github.com/trevin-lee/prusactl/internal/redact"
@@ -46,6 +47,7 @@ func buildVersion() string {
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	compat.Version = buildVersion()
 	if err := run(ctx, os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "prusactl:", err)
 		os.Exit(1)

@@ -32,12 +32,15 @@ type supportedCommand struct {
 
 func (s *Server) supportedCommands(ctx context.Context, uuid string) ([]supportedCommand, error) {
 	var resp struct {
-		Commands []supportedCommand `json:"commands"`
+		Commands *[]supportedCommand `json:"commands"`
 	}
 	if err := s.connect.Get(ctx, printerPath(uuid, "supported-commands"), nil, &resp); err != nil {
 		return nil, err
 	}
-	return resp.Commands, nil
+	if resp.Commands == nil {
+		return nil, connect.Missing("GET", printerPath(uuid, "supported-commands"), "commands")
+	}
+	return *resp.Commands, nil
 }
 
 // printerState reads the printer's current state as Connect reports it.
@@ -55,6 +58,15 @@ func stateOf(p map[string]any) string {
 	}
 	st, _ := p["printer_state"].(string)
 	return st
+}
+
+// connectState is stateOf for decisions that depend on the state: a record
+// without one means the format changed, and guessing would skip the checks.
+func connectState(p map[string]any, uuid string) (string, error) {
+	if st := stateOf(p); st != "" {
+		return st, nil
+	}
+	return "", connect.Missing("GET", printerPath(uuid), "connect_state")
 }
 
 type commandResult struct {
@@ -96,7 +108,11 @@ func (s *Server) runCommand(ctx context.Context, p printerSummary, command strin
 		if err != nil {
 			return nil, err
 		}
-		if st := stateOf(detail); st != "" && !slices.Contains(match.ExecutableFromState, st) {
+		st, err := connectState(detail, p.UUID)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(match.ExecutableFromState, st) {
 			return nil, fmt.Errorf("%s can't run %s while %s; allowed in: %s",
 				p.Name, command, st, strings.Join(match.ExecutableFromState, ", "))
 		}

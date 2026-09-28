@@ -247,6 +247,10 @@ to an agent. `--raw` shows them.
   same endpoints as connect.prusa3d.com, so a change on Prusa's side can break the
   Connect route. The direct route uses Prusa's documented
   [PrusaLink API](https://github.com/prusa3d/Prusa-Link-Web/blob/master/spec/openapi.yaml).
+  If either changes, prusactl says so instead of misbehaving: "Prusa Connect
+  answered in a way prusactl 0.1.3 doesn't recognize: …", naming the request
+  and what was unexpected. Updating prusactl usually fixes it; if the newest
+  version doesn't, report the message as an issue.
 
 ## Configuration
 

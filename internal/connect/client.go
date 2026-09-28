@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/trevin-lee/prusactl/internal/compat"
 	"github.com/trevin-lee/prusactl/internal/redact"
 )
 
@@ -71,6 +72,28 @@ func (e *APIError) Error() string {
 	return msg
 }
 
+// apiChanged says why an error response means the API itself moved, or
+// returns "". Connect answers an unknown route with 404 NOT_FOUND_ENDPOINT, and
+// a missing record with a specific code (NOT_FOUND_PRINTER, ...), which is a
+// normal error; a 404 without any code didn't come from Connect's API at all.
+func apiChanged(status int, body []byte) string {
+	var e struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(body, &e)
+	switch {
+	case status == http.StatusNotFound && e.Code == "NOT_FOUND_ENDPOINT":
+		return "is no longer an endpoint"
+	case status == http.StatusNotFound && e.Code == "":
+		return "returned 404 without Prusa Connect's usual error code"
+	case status == http.StatusMethodNotAllowed:
+		return "is no longer allowed"
+	case status == http.StatusGone:
+		return "was removed (410 Gone)"
+	}
+	return ""
+}
+
 // IsStatus reports whether err is an APIError with the given status.
 func IsStatus(err error, status int) bool {
 	var ae *APIError
@@ -113,7 +136,11 @@ func (c *Client) Do(ctx context.Context, req Request) (*http.Response, error) {
 		if resp.StatusCode < 200 || resp.StatusCode > 299 {
 			defer resp.Body.Close()
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-			return nil, &APIError{Method: req.Method, Path: req.Path, Status: resp.StatusCode, Body: string(b)}
+			apiErr := &APIError{Method: req.Method, Path: req.Path, Status: resp.StatusCode, Body: string(b)}
+			if detail := apiChanged(resp.StatusCode, b); detail != "" {
+				return nil, &compat.Error{Service: compat.Connect, Detail: fmt.Sprintf("%s %s %s", req.Method, req.Path, detail), Err: apiErr}
+			}
+			return nil, apiErr
 		}
 		return resp, nil
 	}
@@ -196,9 +223,17 @@ func (c *Client) JSON(ctx context.Context, req Request, out any) error {
 		return nil
 	}
 	if err := json.Unmarshal(b, out); err != nil {
-		return fmt.Errorf("Prusa Connect: %s %s returned unreadable JSON: %w", req.Method, req.Path, err)
+		// Not JSON, or JSON of a different shape (a list where an object was,
+		// a string where a number was): the response format changed.
+		return &compat.Error{Service: compat.Connect, Detail: fmt.Sprintf("%s %s returned data in a different format (%v)", req.Method, req.Path, err), Err: err}
 	}
 	return nil
+}
+
+// Missing reports a response that decoded but lacks a field prusactl needs,
+// such as the "printers" list, which would otherwise read as empty.
+func Missing(method, path, field string) error {
+	return compat.New(compat.Connect, "%s %s no longer includes %q", method, path, field)
 }
 
 // Get is shorthand for a GET returning JSON.

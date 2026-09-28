@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/trevin-lee/prusactl/internal/compat"
 	"github.com/trevin-lee/prusactl/internal/redact"
 )
 
@@ -123,9 +124,32 @@ func (c *Client) Do(ctx context.Context, req Request) (*http.Response, error) {
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		defer resp.Body.Close()
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
-		return nil, &APIError{Method: req.Method, Path: req.Path, Status: resp.StatusCode, Body: string(b)}
+		apiErr := &APIError{Method: req.Method, Path: req.Path, Status: resp.StatusCode, Body: string(b)}
+		if missingEndpoint(req.Path, resp.StatusCode) {
+			return nil, &compat.Error{Service: compat.Printer, Detail: fmt.Sprintf("%s %s answered %d", req.Method, req.Path, resp.StatusCode), Err: apiErr}
+		}
+		return nil, apiErr
 	}
 	return resp, nil
+}
+
+// fixedEndpoints always exist in PrusaLink API v1, so a 404 or 405 from one of
+// them means the firmware changed the API. Anything under /api/v1/files can
+// legitimately be missing (a file that isn't there), so it doesn't count.
+var fixedEndpoints = map[string]bool{
+	"/api/version":     true,
+	"/api/v1/info":     true,
+	"/api/v1/status":   true,
+	"/api/v1/storage":  true,
+	"/api/v1/job":      true,
+	"/api/v1/transfer": true,
+}
+
+func missingEndpoint(path string, status int) bool {
+	if status != http.StatusNotFound && status != http.StatusMethodNotAllowed {
+		return false
+	}
+	return fixedEndpoints[path]
 }
 
 func (c *Client) currentChallenge() *challenge {
@@ -215,7 +239,7 @@ func (c *Client) JSON(ctx context.Context, req Request, out any) (found bool, er
 		return true, nil
 	}
 	if err := json.Unmarshal(b, out); err != nil {
-		return false, fmt.Errorf("printer: %s %s returned unreadable JSON: %w", req.Method, req.Path, err)
+		return false, &compat.Error{Service: compat.Printer, Detail: fmt.Sprintf("%s %s returned data in a different format (%v)", req.Method, req.Path, err), Err: err}
 	}
 	return true, nil
 }

@@ -322,12 +322,16 @@ type printerSummary struct {
 
 func (s *Server) listPrinters(ctx context.Context) ([]json.RawMessage, error) {
 	var page struct {
-		Printers []json.RawMessage `json:"printers"`
+		Printers *[]json.RawMessage `json:"printers"`
 	}
 	if err := s.connect.Get(ctx, "/app/printers", nil, &page); err != nil {
 		return nil, err
 	}
-	return page.Printers, nil
+	if page.Printers == nil {
+		// Otherwise a renamed list would read as "no printers".
+		return nil, connect.Missing("GET", "/app/printers", "printers")
+	}
+	return *page.Printers, nil
 }
 
 // resolvePrinter maps a name, serial or UUID (or nothing, with a single
@@ -343,6 +347,9 @@ func (s *Server) resolvePrinter(ctx context.Context, ref string) (printerSummary
 		if err := json.Unmarshal(r, &p); err == nil && p.UUID != "" {
 			printers = append(printers, p)
 		}
+	}
+	if len(printers) == 0 && len(raws) > 0 {
+		return printerSummary{}, connect.Missing("GET", "/app/printers", "uuid")
 	}
 	if len(printers) == 0 {
 		return printerSummary{}, errors.New("this Prusa Connect account has no printers")

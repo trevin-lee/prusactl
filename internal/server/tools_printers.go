@@ -154,18 +154,21 @@ func (s *Server) addPrinterTools() {
 			return nil, nil, err
 		}
 		var cams struct {
-			Cameras []map[string]any `json:"cameras"`
+			Cameras *[]map[string]any `json:"cameras"`
 		}
 		if err := s.connect.Get(ctx, printerPath(p.UUID, "cameras"), nil, &cams); err != nil {
 			return nil, nil, err
 		}
-		if len(cams.Cameras) == 0 {
+		if cams.Cameras == nil {
+			return nil, nil, connect.Missing("GET", printerPath(p.UUID, "cameras"), "cameras")
+		}
+		if len(*cams.Cameras) == 0 {
 			return nil, nil, fmt.Errorf("%s has no camera in Prusa Connect", p.Name)
 		}
-		cam := cams.Cameras[0]
+		cam := (*cams.Cameras)[0]
 		if in.CameraID != "" {
 			cam = nil
-			for _, c := range cams.Cameras {
+			for _, c := range *cams.Cameras {
 				if fmt.Sprint(c["id"]) == in.CameraID || fmt.Sprint(c["name"]) == in.CameraID {
 					cam = c
 				}

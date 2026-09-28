@@ -17,6 +17,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/trevin-lee/prusactl/internal/compat"
 )
 
 // These mirror window.ACCOUNT_URL / ACCOUNT_CLIENT_ID in
@@ -127,9 +129,11 @@ func (e *OAuthError) Error() string {
 }
 
 // Revoked reports whether the grant itself is dead, as opposed to a transient
-// failure, so the caller knows to discard the stored refresh token.
+// failure, so the caller knows to discard the stored refresh token. A rejected
+// client ID is not revocation: the session may be fine, and signing in again
+// would fail the same way (see exchange).
 func (e *OAuthError) Revoked() bool {
-	return e.Code == "invalid_grant" || e.Code == "invalid_client" || e.Code == "unauthorized_client"
+	return e.Code == "invalid_grant"
 }
 
 func (c Config) exchange(ctx context.Context, form url.Values) (*Token, error) {
@@ -153,6 +157,14 @@ func (c Config) exchange(ctx context.Context, form url.Values) (*Token, error) {
 	if resp.StatusCode != http.StatusOK {
 		oe := &OAuthError{Status: resp.StatusCode}
 		_ = json.Unmarshal(body, oe)
+		switch {
+		case oe.Code == "invalid_client" || oe.Code == "unauthorized_client":
+			// prusactl signs in as the Connect web app; Prusa no longer
+			// accepts that app ID for this.
+			return nil, &compat.Error{Service: compat.Account, Detail: "the token endpoint rejected the app ID prusactl signs in with (" + oe.Code + ")", Err: oe}
+		case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusGone:
+			return nil, &compat.Error{Service: compat.Account, Detail: fmt.Sprintf("POST /o/token/ answered %d", resp.StatusCode), Err: oe}
+		}
 		return nil, oe
 	}
 	var raw struct {
@@ -161,10 +173,10 @@ func (c Config) exchange(ctx context.Context, form url.Values) (*Token, error) {
 		ExpiresIn    int64  `json:"expires_in"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("unreadable token response: %w", err)
+		return nil, &compat.Error{Service: compat.Account, Detail: fmt.Sprintf("POST /o/token/ returned data in a different format (%v)", err), Err: err}
 	}
 	if raw.AccessToken == "" {
-		return nil, errors.New("token response had no access_token")
+		return nil, compat.New(compat.Account, "POST /o/token/ no longer includes %q", "access_token")
 	}
 	t := &Token{AccessToken: raw.AccessToken, RefreshToken: raw.RefreshToken}
 	// Prefer the JWT's own exp claim, as the Connect web app does.

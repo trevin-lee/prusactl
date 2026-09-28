@@ -33,6 +33,10 @@ type fakeConnect struct {
 	mu    sync.Mutex
 	state string
 	sent  []string // commands the printer was sent
+
+	// Simulated API changes.
+	renamedList bool // /app/printers lists them under another key
+	noState     bool // printer records carry no connect_state
 }
 
 func (f *fakeConnect) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -40,8 +44,12 @@ func (f *fakeConnect) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	switch {
+	case r.URL.Path == "/app/printers" && f.renamedList:
+		fmt.Fprint(w, `{"items":[{"uuid":"u1","name":"Core One","team_id":1}]}`)
 	case r.URL.Path == "/app/printers":
 		fmt.Fprintf(w, `{"printers":[{"uuid":"u1","name":"Core One","team_id":1,"connect_state":%q}]}`, f.state)
+	case r.URL.Path == "/app/printers/u1" && f.noState:
+		fmt.Fprint(w, `{"uuid":"u1","name":"Core One","status":{"state":"FINISHED"}}`)
 	case r.URL.Path == "/app/printers/u1":
 		fmt.Fprintf(w, `{"uuid":"u1","name":"Core One","connect_state":%q}`, f.state)
 	case r.URL.Path == "/app/printers/u1/supported-commands":
@@ -130,5 +138,25 @@ func TestSendCommandPlateRule(t *testing.T) {
 	fc.mu.Unlock()
 	if text, isErr := call(t, cs, "send_command", map[string]any{"command": "HOME"}); isErr {
 		t.Fatalf("HOME while idle: %s", text)
+	}
+}
+
+// A renamed or missing field must surface as "Prusa changed its API", not as
+// a wrong answer ("no printers") or a check silently skipped.
+func TestChangedConnectFormatIsReported(t *testing.T) {
+	cs := connectConnectTools(t, &fakeConnect{state: "IDLE", renamedList: true})
+	text, isErr := call(t, cs, "list_supported_commands", map[string]any{})
+	if !isErr || !strings.Contains(text, "changed its API") || strings.Contains(text, "no printers") {
+		t.Errorf("renamed printer list: %q", text)
+	}
+
+	fc := &fakeConnect{state: "FINISHED", noState: true}
+	cs = connectConnectTools(t, fc)
+	text, isErr = call(t, cs, "send_command", map[string]any{"command": "HOME"})
+	if !isErr || !strings.Contains(text, "connect_state") || !strings.Contains(text, "changed its API") {
+		t.Errorf("record without a state: %q", text)
+	}
+	if sent := fc.sentCommands(); len(sent) != 0 {
+		t.Fatalf("sent %v although the state couldn't be read", sent)
 	}
 }

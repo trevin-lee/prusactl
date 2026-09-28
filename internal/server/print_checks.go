@@ -78,7 +78,7 @@ func (s *Server) printerState(ctx context.Context, t target) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return stateOf(p), nil
+	return connectState(p, t.connect.UUID)
 }
 
 // readyToStart refuses a print or G-code the printer can't take, before

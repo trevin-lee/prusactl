@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"golang.org/x/net/html"
+
+	"github.com/trevin-lee/prusactl/internal/compat"
 )
 
 // Prompter asks the user for sign-in details. prusactl implements it with
@@ -72,7 +74,7 @@ func (c Config) PasswordLogin(ctx context.Context, prompt Prompter) (*Token, err
 		}
 		form := page.pick()
 		if form == nil {
-			return nil, fmt.Errorf("unexpected page from Prusa Account (%d %q)%s", page.status, page.title, page.errorsSuffix())
+			return nil, compat.New(compat.Account, "sign-in showed a page prusactl doesn't know (%d %q)%s", page.status, page.title, page.errorsSuffix())
 		}
 		values := form.hidden
 		switch form.kind {
@@ -112,7 +114,7 @@ func (c Config) PasswordLogin(ctx context.Context, prompt Prompter) (*Token, err
 			return nil, err
 		}
 	}
-	return nil, errors.New("sign-in did not finish; Prusa Account may have changed its login pages")
+	return nil, compat.New(compat.Account, "sign-in did not finish after %d steps", 8)
 }
 
 func get(ctx context.Context, client *http.Client, u string) (*http.Response, error) {
