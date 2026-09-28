@@ -41,16 +41,41 @@ It is one Go binary with no browser involved. Setup is two terminal prompts.
 
 ## Install
 
+**Homebrew** (macOS and Linux):
+
 ```sh
-brew install trevin-lee/tap/prusactl                             # macOS and Linux
-go install github.com/trevin-lee/prusactl/cmd/prusactl@latest   # anywhere with Go
+brew install trevin-lee/tap/prusactl
 ```
 
-Or download a binary from [Releases](https://github.com/trevin-lee/prusactl/releases):
-macOS (universal), Linux (x86-64, ARM64, ARMv7 such as a Raspberry Pi), and
-Windows (x86-64, ARM64). The binaries are not code-signed. Homebrew handles that
-on macOS; a downloaded binary may need `xattr -d com.apple.quarantine prusactl`
-first.
+Tab completion for bash, zsh, and fish comes with it. Update with
+`brew upgrade prusactl`; remove with `brew uninstall prusactl`.
+
+**A downloaded binary:** get the archive for your system from
+[Releases](https://github.com/trevin-lee/prusactl/releases): macOS (universal),
+Linux (x86-64, ARM64, ARMv7 such as a Raspberry Pi), or Windows (x86-64, ARM64).
+`checksums.txt` lists their SHA-256 sums.
+
+```sh
+tar -xzf prusactl_*_linux_arm64.tar.gz   # macOS and Linux: unpack the one you downloaded
+sudo install prusactl /usr/local/bin/    # or any other folder on your PATH
+```
+
+On Windows, unzip it and put `prusactl.exe` in a folder on your `PATH`. The
+binaries aren't code-signed: if macOS won't open it because it can't verify the
+developer, run `xattr -d com.apple.quarantine /usr/local/bin/prusactl`. To
+update, replace the file with a newer release. `prusactl help completion`
+shows how to add Tab completion.
+
+**Go:**
+
+```sh
+go install github.com/trevin-lee/prusactl/cmd/prusactl@latest
+```
+
+This puts it in `$(go env GOPATH)/bin`, which needs to be on your `PATH`. It
+needs Go 1.26.6 or newer; recent Go versions fetch that on their own.
+
+Check it worked with `prusactl --version`.
 
 ## Quick start
 
@@ -62,19 +87,39 @@ prusactl login                 # optional: Prusa Connect, for remote access, cam
 ```
 
 The PrusaLink password is on the printer under **Settings → Network → PrusaLink**.
+PrusaLink is on by default; if someone turned it off, turn it back on there.
 
-Add it to Claude Code:
+## Connect an AI agent
+
+**Claude Code:**
 
 ```sh
-claude mcp add --scope user prusa -- prusactl mcp
+claude mcp add --scope user prusa -- "$(command -v prusactl)" mcp
 ```
 
-Any other MCP client works the same way: run `prusactl mcp` as a stdio server.
-Each release also includes `prusactl.mcpb`, a one-file bundle for clients that
-install MCPB extensions. It asks for the printer address and password when you
-install it. prusactl is listed in the
-[MCP Registry](https://registry.modelcontextprotocol.io) as
-`io.github.trevin-lee/prusactl`.
+`$(command -v prusactl)` saves the full path, so it works even when the app isn't
+started from a terminal that has your `PATH`.
+
+**Any other MCP client:** add prusactl as a stdio server, using the path that
+`command -v prusactl` prints (`where prusactl` on Windows):
+
+```json
+{
+  "mcpServers": {
+    "prusa": { "command": "/opt/homebrew/bin/prusactl", "args": ["mcp"] }
+  }
+}
+```
+
+**The MCP bundle:** each release includes `prusactl.mcpb`, which carries its own
+copy of prusactl for macOS, Linux x86-64, and Windows x86-64. Open it in an app
+that installs MCPB extensions, such as Claude Desktop (double-click the file),
+and enter the printer's address and PrusaLink password when asked. The bundle
+covers the direct route; Prusa Connect sign-in still needs `prusactl login` from
+an installed copy.
+
+prusactl is also listed in the [MCP Registry](https://registry.modelcontextprotocol.io)
+as `io.github.trevin-lee/prusactl`, for clients that browse it.
 
 ## How it works
 

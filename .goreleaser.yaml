@@ -59,6 +59,7 @@ release:
   footer: |
     **Install:** `brew install trevin-lee/tap/prusactl`, `go install github.com/trevin-lee/prusactl/cmd/prusactl@{{ .Tag }}`, or download a binary below.
     `prusactl.mcpb` is a one-click MCP bundle for clients that support MCPB.
+    Setup, and connecting an AI agent: see the [README](https://github.com/trevin-lee/prusactl#install).
 
 homebrew_casks:
   - name: prusactl
