@@ -142,7 +142,15 @@ prusactl status                    printer state and how it is reachable
 prusactl mcp                       run the MCP server on stdio
 prusactl download PATH [DEST]      copy a file from the printer to this computer
 prusactl api [METHOD] PATH [JSON]  /api/... to the printer, /app/... to Prusa Connect
+prusactl completion bash|zsh|fish  print a shell completion script
+prusactl help [COMMAND]            the command list, or one command's details
+prusactl --version
 ```
+
+`prusactl help <command>` (or `<command> --help`) explains a command and its
+flags, and flags work before or after the arguments. Tab completion covers
+commands, flags, and their values: Homebrew installs it for bash, zsh, and fish,
+and `prusactl help completion` shows how to add it otherwise.
 
 `prusactl setup --forget` removes the saved printer. `--api-key` uses a PrusaLink
 API key instead of the password, and `--password-stdin` reads the secret from a

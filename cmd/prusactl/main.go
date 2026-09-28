@@ -43,23 +43,6 @@ func buildVersion() string {
 	return "dev"
 }
 
-const usage = `prusactl: control a Prusa printer from the terminal or an AI agent.
-
-Usage:
-  prusactl setup [ADDRESS]           connect directly to the printer on your network
-  prusactl login                     optional: sign in to Prusa Connect (remote access,
-                                     camera, dialogs, queue, history)
-  prusactl logout                    forget the Prusa Connect session
-  prusactl status                    printer state and how it is reachable
-  prusactl mcp                       run the MCP server on stdio
-  prusactl download PATH [DEST]      copy a file from the printer's storage to this
-                                     computer, e.g. /usb/part.bgcode
-  prusactl api [METHOD] PATH [JSON]  call an API directly: /api/... goes to the
-                                     printer, /app/... to Prusa Connect. API keys
-                                     and tokens are masked; --raw shows them
-  prusactl version
-`
-
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -71,41 +54,63 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		fmt.Print(usage)
+		printUsage(os.Stdout)
 		return nil
 	}
-	session := auth.NewSession()
-	cc := connect.New(session, "prusactl/"+buildVersion())
-	lc, lcErr := link.Open()
+	name := args[0]
+	switch name {
+	case "-h", "--help", "-help":
+		name = "help"
+	case "-v", "--version", "-version":
+		name = "version"
+	}
+	cmd := lookup(name)
+	if cmd == nil {
+		return unknownCommand(name)
+	}
+	rest := args[1:]
+	if wantsHelp(rest) {
+		cmd.printHelp(os.Stdout)
+		return nil
+	}
 
-	switch args[0] {
+	// Commands that don't need the saved credentials, so they never touch the
+	// keychain (which can prompt on macOS).
+	switch name {
+	case "help":
+		return helpCommand(rest)
+	case "version":
+		fmt.Println("prusactl", buildVersion())
+		return nil
+	case "completion":
+		return completionCommand(rest)
 	case "setup":
-		return setup(ctx, args[1:])
-	case "login":
-		return login(ctx, session, cc, lc, lcErr)
-	case "logout":
+		return setup(ctx, rest)
+	}
+
+	session := auth.NewSession()
+	if name == "logout" {
 		if err := session.Logout(); err != nil {
 			return err
 		}
 		fmt.Println("Signed out of Prusa Connect; the saved session was removed.")
 		return nil
+	}
+	cc := connect.New(session, "prusactl/"+buildVersion())
+	lc, lcErr := link.Open()
+	switch name {
+	case "login":
+		return login(ctx, session, cc, lc, lcErr)
 	case "status":
 		return status(ctx, server.New(session, cc, lc, lcErr, buildVersion()), lc)
 	case "mcp":
 		return server.New(session, cc, lc, lcErr, buildVersion()).Run(ctx)
 	case "download":
-		return download(ctx, lc, lcErr, args[1:])
+		return download(ctx, lc, lcErr, rest)
 	case "api":
-		return apiCommand(ctx, cc, lc, lcErr, args[1:])
-	case "version":
-		fmt.Println(buildVersion())
-		return nil
-	case "help", "-h", "--help":
-		fmt.Print(usage)
-		return nil
-	default:
-		return fmt.Errorf("unknown command %q\n\n%s", args[0], usage)
+		return apiCommand(ctx, cc, lc, lcErr, rest)
 	}
+	return unknownCommand(name)
 }
 
 var stdin = bufio.NewReader(os.Stdin)
@@ -131,19 +136,15 @@ func askSecret(prompt string) (string, error) {
 }
 
 func setup(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
-	user := fs.String("user", "maker", "PrusaLink username")
-	apiKey := fs.Bool("api-key", false, "authenticate with a PrusaLink API key instead of the password")
-	fromStdin := fs.Bool("password-stdin", false, "read the password or API key from stdin")
-	forget := fs.Bool("forget", false, "remove the saved printer and its password")
-	pos, err := parseFlags(fs, args)
+	opts, pos, err := lookup("setup").parse(args)
 	if err != nil {
 		return err
 	}
 	if len(pos) > 1 {
-		return errors.New("setup: usage: prusactl setup [flags] [ADDRESS]")
+		return errors.New("setup: usage: prusactl setup [flags] [ADDRESS] (see `prusactl help setup`)")
 	}
-	if *forget {
+	user, apiKey, fromStdin := opts.str("user"), opts.on("api-key"), opts.on("password-stdin")
+	if opts.on("forget") {
 		cfg, err := link.LoadConfig()
 		if errors.Is(err, link.ErrNotConfigured) {
 			fmt.Println("No printer is set up.")
@@ -173,14 +174,14 @@ func setup(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg := link.Config{Host: host, User: *user, Auth: link.AuthDigest}
+	cfg := link.Config{Host: host, User: user, Auth: link.AuthDigest}
 	what := "PrusaLink password (on the printer: Settings > Network > PrusaLink)"
-	if *apiKey {
+	if apiKey {
 		cfg.Auth, what = link.AuthAPIKey, "PrusaLink API key"
 	}
 
 	var pass string
-	if *fromStdin {
+	if fromStdin {
 		b, err := io.ReadAll(io.LimitReader(os.Stdin, 4096))
 		if err != nil {
 			return err
@@ -212,7 +213,7 @@ func setup(ctx context.Context, args []string) error {
 		name = info.Hostname
 	}
 	kind := "password"
-	if *apiKey {
+	if apiKey {
 		kind = "API key"
 	}
 	fmt.Printf("Connected to %s at %s. The %s is saved in %s.\n", name, host, kind, secret.Where())
@@ -304,14 +305,12 @@ func orText(a, b any) any {
 }
 
 func download(ctx context.Context, lc *link.Client, lcErr error, args []string) error {
-	fs := flag.NewFlagSet("download", flag.ContinueOnError)
-	overwrite := fs.Bool("overwrite", false, "replace DEST if it already exists")
-	pos, err := parseFlags(fs, args)
+	opts, pos, err := lookup("download").parse(args)
 	if err != nil {
 		return err
 	}
 	if len(pos) == 0 || len(pos) > 2 {
-		return errors.New("download: usage: prusactl download [--overwrite] PATH [DEST], e.g. /usb/part.bgcode")
+		return errors.New("download: usage: prusactl download [--overwrite] PATH [DEST], e.g. /usb/part.bgcode (see `prusactl help download`)")
 	}
 	if lc == nil {
 		return lcErr
@@ -320,7 +319,7 @@ func download(ctx context.Context, lc *link.Client, lcErr error, args []string) 
 	if len(pos) == 2 {
 		dest = pos[1]
 	}
-	path, n, err := lc.Download(ctx, pos[0], dest, *overwrite)
+	path, n, err := lc.Download(ctx, pos[0], dest, opts.on("overwrite"))
 	if errors.Is(err, link.ErrExists) {
 		return fmt.Errorf("%s already exists (add --overwrite to replace it)", path)
 	}

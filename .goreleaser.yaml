@@ -7,6 +7,12 @@ before:
   hooks:
     - go mod tidy
     - go test ./...
+    # Shell completions ship in every archive; Homebrew installs them.
+    - rm -rf completions
+    - mkdir completions
+    - sh -c "go run ./cmd/prusactl completion bash > completions/prusactl.bash"
+    - sh -c "go run ./cmd/prusactl completion zsh > completions/_prusactl"
+    - sh -c "go run ./cmd/prusactl completion fish > completions/prusactl.fish"
 
 builds:
   - id: prusactl
@@ -38,7 +44,7 @@ archives:
         formats: [zip]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ if eq .Arch "all" }}universal{{ else }}{{ .Arch }}{{ end }}{{ if .Arm }}v{{ .Arm }}{{ end }}
-    files: [README.md, LICENSE]
+    files: [README.md, LICENSE, completions/*]
 
 checksum:
   name_template: checksums.txt
@@ -57,6 +63,10 @@ release:
 homebrew_casks:
   - name: prusactl
     binaries: [prusactl]
+    completions:
+      bash: completions/prusactl.bash
+      zsh: completions/_prusactl
+      fish: completions/prusactl.fish
     homepage: https://github.com/trevin-lee/prusactl
     description: Run a Prusa 3D printer from the terminal or an AI agent (CLI + MCP server)
     license: MIT
