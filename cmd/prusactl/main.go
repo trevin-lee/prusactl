@@ -156,7 +156,11 @@ func setup(ctx context.Context, args []string) error {
 		if err := link.RemoveConfig(cfg); err != nil {
 			return err
 		}
-		fmt.Printf("Forgot %s and its saved password.\n", cfg.Host)
+		kind := "password"
+		if cfg.Auth == link.AuthAPIKey {
+			kind = "API key"
+		}
+		fmt.Printf("Forgot %s and its saved %s.\n", cfg.Host, kind)
 		return nil
 	}
 
