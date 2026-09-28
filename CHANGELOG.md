@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 (2026-09-28)
 
 - When Prusa changes an API, prusactl says so plainly instead of misbehaving:
   "Prusa Connect answered in a way prusactl doesn't recognize: …", naming the
