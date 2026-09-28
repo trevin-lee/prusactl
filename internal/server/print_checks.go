@@ -3,8 +3,51 @@ package server
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
+
+// plateConfirmation is embedded in every tool input that can start a job or
+// move toward the plate, so the rule has one field and one meaning everywhere.
+// Marking the printer ready (SET_PRINTER_READY, add_to_queue's set_ready) is
+// Prusa's own form of the same confirmation.
+type plateConfirmation struct {
+	PlateClear bool `json:"plate_clear,omitempty" jsonschema:"set only after confirming (camera or a person) that nothing is left on the plate; required when the printer is FINISHED or STOPPED, since the last print may still be there"`
+}
+
+// plateCommands are firmware commands that start a job or move the head or
+// bed where a part left from the last print would be hit.
+var plateCommands = map[string]bool{
+	"START_PRINT":       true,
+	"HOME":              true,
+	"MOVE":              true,
+	"MOVE_Z":            true,
+	"MESH_BED_LEVELING": true,
+}
+
+func needsPlateCheck(command string) bool {
+	return plateCommands[strings.ToUpper(strings.TrimSpace(command))]
+}
+
+// plateErr is the rule itself: after a finished or stopped print, someone
+// has to have looked at the plate.
+func plateErr(name, state string, plateClear bool) error {
+	if (state == "FINISHED" || state == "STOPPED") && !plateClear {
+		return fmt.Errorf("%s is %s, so the last print may still be on the plate. Look first (get_camera_snapshot, "+
+			"or ask the user), then call again with plate_clear=true", name, state)
+	}
+	return nil
+}
+
+// plateCheck applies the plate rule alone, for commands whose other state
+// requirements the printer's supported-command list already covers.
+func (s *Server) plateCheck(ctx context.Context, t target, plateClear bool) error {
+	state, err := s.printerState(ctx, t)
+	if err != nil {
+		return fmt.Errorf("checking %s's plate state: %w", t.name, err)
+	}
+	return plateErr(t.name, state, plateClear)
+}
 
 // canStart is what the firmware itself accepts a remote print from (see
 // printer_state::remote_print_ready in Prusa-Firmware-Buddy). FINISHED and
@@ -60,11 +103,7 @@ func (s *Server) readyToStart(ctx context.Context, t target, plateClear bool) er
 		}
 		return fmt.Errorf("%s is %s, so it can't take a new job%s", t.name, state, hint)
 	}
-	if (state == "FINISHED" || state == "STOPPED") && !plateClear {
-		return fmt.Errorf("%s is %s, so the last print may still be on the plate. Look first (get_camera_snapshot, "+
-			"or ask the user), then call again with plate_clear=true", t.name, state)
-	}
-	return nil
+	return plateErr(t.name, state, plateClear)
 }
 
 // startedState waits briefly for a print just started directly to leave the

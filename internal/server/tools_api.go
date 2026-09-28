@@ -32,7 +32,8 @@ func (s *Server) addAPITool() {
 			"starting with /api/ go to the printer itself over the local network (PrusaLink, e.g. /api/v1/status); " +
 			"paths starting with /app/ go to Prusa Connect as the signed-in user (e.g. PATCH /app/printers/{uuid} for " +
 			"settings, /app/stats/printers/{uuid}/..., /app/teams/{team_id}/files). Credentials in responses are " +
-			"redacted. Prefer the dedicated tools when one fits.",
+			"redacted. This is raw access: the dedicated tools' safety checks (a busy printer, plate_clear) don't apply " +
+			"here, so use start_print, upload_file, run_gcode or send_command for anything that prints or moves the printer.",
 		Annotations: mutating("Raw API call", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in apiInput) (*mcp.CallToolResult, any, error) {
 		method := strings.ToUpper(strings.TrimSpace(in.Method))

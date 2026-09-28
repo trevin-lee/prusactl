@@ -29,12 +29,12 @@ type listFilesInput struct {
 
 type uploadInput struct {
 	printerRef
+	plateConfirmation
 	LocalPath   string `json:"local_path" jsonschema:"absolute path of a sliced file (.bgcode or .gcode) on this computer"`
 	Destination string `json:"destination,omitempty" jsonschema:"printer folder to copy it into, e.g. /usb/; default is the printer's first storage"`
 	Filename    string `json:"filename,omitempty" jsonschema:"name on the printer; default is the local file name"`
 	Then        string `json:"then,omitempty" jsonschema:"after uploading: none (just store it), print (start it right away), or queue (add to the Prusa Connect print queue); default none"`
 	Overwrite   bool   `json:"overwrite,omitempty" jsonschema:"replace a file with the same name on the printer (direct route)"`
-	PlateClear  bool   `json:"plate_clear,omitempty" jsonschema:"set only after confirming (camera or a person) that nothing is left on the plate; required when the printer is FINISHED or STOPPED, since the last print may still be there"`
 }
 
 type downloadInput struct {
@@ -50,14 +50,14 @@ type queueInput struct {
 	Hash      string `json:"hash,omitempty" jsonschema:"file in Connect storage (from upload_file or list_connect_files); use instead of path"`
 	TeamID    int64  `json:"team_id,omitempty" jsonschema:"team owning the Connect file; default is the printer's team"`
 	Position  *int   `json:"position,omitempty" jsonschema:"0 = front of the queue, -1 = end (default)"`
-	SetReady  bool   `json:"set_ready,omitempty" jsonschema:"also mark the printer ready (plate clear) so Connect starts the next job; only with hash"`
+	SetReady  bool   `json:"set_ready,omitempty" jsonschema:"also mark the printer ready so Connect starts the next job; only with hash. Ready means the plate is clear, the same confirmation plate_clear gives elsewhere: set it only after checking the camera or asking the user"`
 	WaitUntil int64  `json:"wait_until,omitempty" jsonschema:"unix time before which the job must not start; only with hash"`
 }
 
 type startPrintInput struct {
 	printerRef
-	Path       string `json:"path" jsonschema:"file on the printer as list_printer_files reports it, e.g. /usb/3DBENC~2.BGC"`
-	PlateClear bool   `json:"plate_clear,omitempty" jsonschema:"set only after confirming (camera or a person) that nothing is left on the plate; required when the printer is FINISHED or STOPPED, since the last print may still be there"`
+	plateConfirmation
+	Path string `json:"path" jsonschema:"file on the printer as list_printer_files reports it, e.g. /usb/3DBENC~2.BGC"`
 }
 
 type deleteFilesInput struct {
@@ -291,7 +291,8 @@ func (s *Server) addFileTools() {
 		Name: "add_to_queue",
 		Description: "Add a file to the printer's Prusa Connect print queue, either one on the printer (path) or " +
 			"one in Connect storage (hash). Connect starts the next queued job when the printer is idle and marked " +
-			"ready (send_command SET_PRINTER_READY, or set_ready here).",
+			"ready (send_command SET_PRINTER_READY, or set_ready here). Marking it ready says the plate is clear, the " +
+			"same confirmation as plate_clear: do it only after checking the camera or asking the user.",
 		Annotations: mutating("Queue print", false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in queueInput) (*mcp.CallToolResult, any, error) {
 		if (in.Path == "") == (in.Hash == "") {

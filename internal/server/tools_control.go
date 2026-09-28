@@ -132,6 +132,7 @@ type listCommandsInput struct {
 
 type sendCommandInput struct {
 	printerRef
+	plateConfirmation
 	Command        string         `json:"command" jsonschema:"command name exactly as list_supported_commands shows it, e.g. HOME, MOVE, SET_NOZZLE_TEMPERATURE"`
 	Kwargs         map[string]any `json:"kwargs,omitempty" jsonschema:"command arguments by name, typed as list_supported_commands describes them"`
 	Async          bool           `json:"async,omitempty" jsonschema:"queue the command and return immediately instead of waiting for the printer to acknowledge it"`
@@ -145,8 +146,8 @@ type controlPrintInput struct {
 
 type gcodeInput struct {
 	printerRef
-	Gcode      string `json:"gcode" jsonschema:"G-code lines to run, e.g. \"G28\\nM104 S215\""`
-	PlateClear bool   `json:"plate_clear,omitempty" jsonschema:"set only after confirming (camera or a person) that nothing is left on the plate; required when the printer is FINISHED or STOPPED, since the last print may still be there"`
+	plateConfirmation
+	Gcode string `json:"gcode" jsonschema:"G-code lines to run, e.g. \"G28\\nM104 S215\""`
 }
 
 // macroPath is where run_gcode puts its one-off job.
@@ -202,12 +203,19 @@ func (s *Server) addControlTools() {
 		Description: "Run any command from list_supported_commands on the printer, exactly as the Connect web app's controls do. " +
 			"The command and state are checked against the printer's supported-command list first. By default waits for the " +
 			"printer to acknowledge. Physical commands (MOVE, HOME, heating, filament, MESH_BED_LEVELING) act on real hardware: " +
-			"check get_printer and the camera first.",
+			"check get_printer and the camera first. After a finished or stopped print, START_PRINT, HOME, MOVE, MOVE_Z and " +
+			"MESH_BED_LEVELING also need plate_clear=true, as start_print does. SET_PRINTER_READY tells Connect the plate is " +
+			"clear, so it is itself that confirmation: send it only after looking.",
 		Annotations: mutating("Send printer command", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sendCommandInput) (*mcp.CallToolResult, any, error) {
 		p, err := s.connectPrinter(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
+		}
+		if needsPlateCheck(in.Command) {
+			if err := s.plateCheck(ctx, target{name: p.Name, connect: p}, in.PlateClear); err != nil {
+				return nil, nil, err
+			}
 		}
 		res, err := s.runCommand(ctx, p, in.Command, in.Kwargs, in.Async, in.TimeoutSeconds)
 		if err != nil {

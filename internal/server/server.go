@@ -26,7 +26,7 @@ Two routes reach it. Direct: the printer's own API on the local network (PrusaLi
 
 Start with connection_status or get_printer. Printer arguments accept a name, serial number, or Connect UUID, and can be omitted with a single printer.
 
-Before anything physical (starting a print, moving axes, heating), check get_printer and, if there is a camera, get_camera_snapshot: the plate must be clear and nothing may be in the way.
+Before anything physical (starting a print, moving axes, heating), check get_printer and, if there is a camera, get_camera_snapshot: the plate must be clear and nothing may be in the way. After a finished or stopped print, the tools that start a job or move toward the plate refuse until called with plate_clear=true; pass it only once you (or the user) have confirmed the plate is empty. Marking the printer ready is the same confirmation.
 
 Setup happens in a terminal, never through these tools: "prusactl setup" for the direct route (the password shown on the printer's screen), "prusactl login" for Prusa Connect. If a tool says one isn't set up, tell the user which command to run.`
 
