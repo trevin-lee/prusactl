@@ -56,10 +56,19 @@ func TestFileBackend(t *testing.T) {
 }
 
 func TestFallsBackWhenKeychainUnavailable(t *testing.T) {
+	for _, tc := range []struct{ goos, msg string }{
+		{"linux", "exec: \"dbus-launch\": executable file not found in $PATH"},
+		{"windows", "A specified logon session does not exist. It may already have been terminated."}, // SSH, services
+	} {
+		t.Run(tc.goos, func(t *testing.T) { fallsBack(t, tc.goos, tc.msg) })
+	}
+}
+
+func fallsBack(t *testing.T, os_, msg string) {
 	useTempFile(t)
-	goos = "linux"
+	goos = os_
 	t.Cleanup(func() { goos = runtime.GOOS })
-	keyring.MockInitWithError(errors.New("exec: \"dbus-launch\": executable file not found in $PATH"))
+	keyring.MockInitWithError(errors.New(msg))
 	t.Cleanup(keyring.MockInit)
 	warned = true // keep test output quiet
 

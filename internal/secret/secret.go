@@ -56,16 +56,24 @@ var goos = runtime.GOOS
 // providing org.freedesktop.secrets.
 var noBackend = regexp.MustCompile(`(?i)dbus|org\.freedesktop\.secrets|ServiceUnknown|session bus|executable file not found`)
 
-// unavailable reports whether a keychain error means this machine has no
-// credential store. It is deliberately narrow: a keychain that exists but
-// refused (the user clicked Deny, or it is locked) must surface as an error,
-// not quietly send the secret to a file. macOS and Windows always have one.
+// noWindowsSession matches Windows' ERROR_NO_SUCH_LOGON_SESSION (1312): a
+// network logon, such as an SSH session or a service, has no Credential
+// Manager.
+var noWindowsSession = regexp.MustCompile(`(?i)logon session does not exist`)
+
+// unavailable reports whether a keychain error means there is no credential
+// store here. It is deliberately narrow: a keychain that exists but refused
+// (the user clicked Deny, or it is locked) must surface as an error, not
+// quietly send the secret to a file. macOS always has one.
 func unavailable(err error) bool {
 	if err == nil || errors.Is(err, keyring.ErrNotFound) || errors.Is(err, keyring.ErrSetDataTooBig) {
 		return false
 	}
-	if goos == "darwin" || goos == "windows" {
+	switch goos {
+	case "darwin":
 		return false
+	case "windows":
+		return noWindowsSession.MatchString(err.Error())
 	}
 	return noBackend.MatchString(err.Error())
 }
