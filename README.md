@@ -48,7 +48,7 @@ brew install trevin-lee/tap/prusactl
 ```
 
 Tab completion for bash, zsh, and fish comes with it. Update with
-`brew upgrade prusactl`; remove with `brew uninstall prusactl`.
+`brew upgrade prusactl`. To remove it, see [Uninstall](#uninstall).
 
 **A downloaded binary:** get the archive for your system from
 [Releases](https://github.com/trevin-lee/prusactl/releases): macOS (universal),
@@ -76,6 +76,15 @@ This puts it in `$(go env GOPATH)/bin`, which needs to be on your `PATH`. It
 needs Go 1.26.6 or newer; recent Go versions fetch that on their own.
 
 Check it worked with `prusactl --version`.
+
+### Uninstall
+
+First remove what prusactl saved: `prusactl setup --forget` deletes the
+printer's address and password, and `prusactl logout` deletes the Prusa Connect
+session. Then remove the program with `brew uninstall prusactl`, or by deleting
+the file. All that's left is a `prusactl` folder holding an empty lock file, in
+your config directory (`~/Library/Application Support` on macOS, `~/.config` on
+Linux, `%AppData%` on Windows); delete it too if you like.
 
 ## Quick start
 
@@ -226,8 +235,12 @@ to an agent. `--raw` shows them.
 - **It has no hands.** It can't clear the build plate, swap a spool, or fix a
   clog. The tool descriptions tell the agent to check the printer (and the camera,
   if any) before starting a print or moving anything. Tools that start a job
-  refuse a busy printer, and after a finished or stopped print they also need
-  `plate_clear: true`, since the last part may still be on the plate.
+  refuse a busy printer. After a finished or stopped print, everything that
+  starts a job or moves toward the plate (`start_print`, `upload_file` with
+  print, `run_gcode`, and `send_command` HOME, MOVE, MOVE_Z,
+  MESH_BED_LEVELING, or START_PRINT) also needs `plate_clear: true`, since the
+  last part may still be there. Marking the printer ready is the same
+  confirmation. `api_request` is raw access and skips these checks.
 - **`run_gcode` runs as a tiny print job.** So it only works while the printer is
   idle, and it shows up in the printer's history.
 - **Connect's API is unofficial.** Prusa doesn't publish it; prusactl uses the
