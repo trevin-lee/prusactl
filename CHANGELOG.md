@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Windows: `setup` and `login` work over SSH and in services, where Windows
+  has no Credential Manager; credentials go in the private `secrets.json`.
+  Tested on Windows 11 ARM64: the test suite, setup, status, and the MCP server.
+- `list_printer_files` pages the printer's folders (default 50, `next_offset`,
+  at most 500), and every tool result is capped at 256 KB with a request to
+  narrow it.
+- `setup --forget` says "API key" when it removes one.
+
 ## 0.1.0 (2026-09-28)
 
 First release.
