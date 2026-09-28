@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 (2026-09-28)
 
 - Windows: `setup` and `login` work over SSH and in services, where Windows
   has no Credential Manager; credentials go in the private `secrets.json`.
