@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 (2026-09-28)
 
 - The plate check applies to every tool that starts a job or moves the printer:
   after a finished or stopped print, `send_command` HOME, MOVE, MOVE_Z,
