@@ -39,11 +39,22 @@ It is one Go binary with no browser involved. Setup is two terminal prompts.
 >
 > What did I print this week, and how many failed?
 
+## Install
+
+```sh
+brew install trevin-lee/tap/prusactl                             # macOS and Linux
+go install github.com/trevin-lee/prusactl/cmd/prusactl@latest   # anywhere with Go
+```
+
+Or download a binary from [Releases](https://github.com/trevin-lee/prusactl/releases):
+macOS (universal), Linux (x86-64, ARM64, ARMv7 such as a Raspberry Pi), and
+Windows (x86-64, ARM64). The binaries are not code-signed. Homebrew handles that
+on macOS; a downloaded binary may need `xattr -d com.apple.quarantine prusactl`
+first.
+
 ## Quick start
 
 ```sh
-go install github.com/trevin-lee/prusactl/cmd/prusactl@latest
-
 prusactl setup 192.168.1.50    # the printer's address; asks for its PrusaLink password
 prusactl status
 
@@ -55,10 +66,15 @@ The PrusaLink password is on the printer under **Settings → Network → PrusaL
 Add it to Claude Code:
 
 ```sh
-claude mcp add --scope user prusa -- "$(go env GOPATH)/bin/prusactl" mcp
+claude mcp add --scope user prusa -- prusactl mcp
 ```
 
 Any other MCP client works the same way: run `prusactl mcp` as a stdio server.
+Each release also includes `prusactl.mcpb`, a one-file bundle for clients that
+install MCPB extensions. It asks for the printer address and password when you
+install it. prusactl is listed in the
+[MCP Registry](https://registry.modelcontextprotocol.io) as
+`io.github.trevin-lee/prusactl`.
 
 ## How it works
 
