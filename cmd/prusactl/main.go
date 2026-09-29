@@ -245,12 +245,13 @@ func setup(ctx context.Context, args []string) error {
 	return nil
 }
 
-// terminalPrompter asks for Prusa Account details on the terminal.
-type terminalPrompter struct{}
+// terminalPrompter asks for Prusa Account details on the terminal. host is
+// where the password will be sent, which PRUSA_ACCOUNT_URL can change.
+type terminalPrompter struct{ host string }
 
 func (terminalPrompter) Email() (string, error) { return ask("Prusa Account email: ") }
-func (terminalPrompter) Password() (string, error) {
-	return askSecret("Password (sent only to account.prusa3d.com, never saved): ")
+func (p terminalPrompter) Password() (string, error) {
+	return askSecret(fmt.Sprintf("Password (sent only to %s, never saved): ", p.host))
 }
 func (terminalPrompter) OneTimeCode() (string, error) {
 	return ask("Two-factor code from your authenticator app: ")
@@ -258,7 +259,7 @@ func (terminalPrompter) OneTimeCode() (string, error) {
 
 func login(ctx context.Context, session *auth.Session, cc *connect.Client, lc *link.Client, lcErr error) error {
 	fmt.Fprintln(os.Stderr, "Signing in to Prusa Connect with your Prusa Account.")
-	if _, err := session.Login(ctx, terminalPrompter{}); err != nil {
+	if _, err := session.Login(ctx, terminalPrompter{host: accountHost(session)}); err != nil {
 		return err
 	}
 	if err := server.RegisterUser(ctx, cc); err != nil {
@@ -491,4 +492,12 @@ func num(v any) string {
 		return "?"
 	}
 	return fmt.Sprint(v)
+}
+
+// accountHost is the host the sign-in form will be posted to.
+func accountHost(session *auth.Session) string {
+	if u, err := url.Parse(session.Config.AccountURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return session.Config.AccountURL
 }

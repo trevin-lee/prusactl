@@ -16,7 +16,7 @@ class Prusactl < Formula
 
   test do
     assert_match version.to_s, shell_output("#{bin}/prusactl --version")
-    # No printer set up: it should say so and exit non-zero, not crash.
+    # With nothing set up, status should say so rather than crash.
     output = shell_output("#{bin}/prusactl status 2>&1")
     assert_match "prusactl setup", output
   end

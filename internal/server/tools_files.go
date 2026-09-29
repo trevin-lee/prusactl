@@ -236,7 +236,7 @@ func (s *Server) addFileTools() {
 		in.Via = "direct"
 		t, err := s.route(ctx, in.printerRef)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("download_printer_file needs the direct connection: %w", err)
 		}
 		path, n, err := s.direct().Download(ctx, in.Path, in.LocalPath, in.Overwrite)
 		if errors.Is(err, link.ErrExists) {
@@ -520,7 +520,8 @@ func compactConnectFolder(raw json.RawMessage) json.RawMessage {
 		}
 		entries = append(entries, e)
 	}
-	res := map[string]any{"folder": folder.Path, "entries": entries, "total": folder.Pager.Total}
+	// Same trailing slash as the direct route, so the two agree exactly.
+	res := map[string]any{"folder": strings.TrimSuffix(folder.Path, "/") + "/", "entries": entries, "total": folder.Pager.Total}
 	if next := folder.Pager.Offset + len(entries); next < folder.Pager.Total {
 		res["next_offset"] = next
 	}
