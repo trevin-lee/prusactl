@@ -141,6 +141,73 @@ func (s *Server) runCommand(ctx context.Context, p printerSummary, command strin
 	return &commandResult{Printer: p.Name, Command: match.Command, Kwargs: kwargs, Response: resp}, nil
 }
 
+// commandStatus is what became of one command sent to the printer.
+type commandStatus struct {
+	CommandID int64     `json:"command_id"`
+	Command   string    `json:"command,omitempty"`
+	State     string    `json:"state"`
+	Events    []cmdStep `json:"events"`
+}
+
+type cmdStep struct {
+	Event   string  `json:"event"`
+	Created float64 `json:"created,omitempty"`
+	Reason  string  `json:"reason,omitempty"`
+}
+
+// commandProgress reports what happened to a command. Prusa Connect has no
+// endpoint for one command; it records a command's life in the printer's event
+// log, so that is where this looks, newest first, until it finds the command or
+// runs out of recent history.
+func (s *Server) commandProgress(ctx context.Context, p printerSummary, id int64) (*commandStatus, error) {
+	const perPage, pages = 100, 5
+	out := &commandStatus{CommandID: id, State: "UNKNOWN"}
+	for page := 0; page < pages; page++ {
+		var body struct {
+			Events []struct {
+				Command   string  `json:"command"`
+				CommandID int64   `json:"command_id"`
+				Event     string  `json:"event"`
+				Created   float64 `json:"created"`
+				Reason    string  `json:"reason"`
+			} `json:"events"`
+		}
+		q := pageQuery(perPage, page*perPage, perPage)
+		if err := s.connect.Get(ctx, printerPath(p.UUID, "events"), q, &body); err != nil {
+			return nil, err
+		}
+		if len(body.Events) == 0 {
+			break
+		}
+		oldest := int64(-1)
+		for _, e := range body.Events {
+			if e.CommandID != id {
+				if e.CommandID > 0 && (oldest < 0 || e.CommandID < oldest) {
+					oldest = e.CommandID
+				}
+				continue
+			}
+			if out.Command == "" {
+				out.Command = e.Command
+			}
+			if len(out.Events) == 0 {
+				out.State = e.Event // newest first, so the first match is the state
+			}
+			out.Events = append(out.Events, cmdStep{Event: e.Event, Created: e.Created, Reason: e.Reason})
+		}
+		// Ids climb, so once the page is entirely older than the one asked
+		// for, no earlier page can hold it.
+		if oldest > 0 && oldest > id {
+			continue
+		}
+		break
+	}
+	if len(out.Events) == 0 {
+		return nil, fmt.Errorf("%s has no record of command %d in its recent events; it may be older than the log kept, or belong to another printer", p.Name, id)
+	}
+	return out, nil
+}
+
 type listCommandsInput struct {
 	printerRef
 	ExecutableNow bool `json:"executable_now,omitempty" jsonschema:"only list commands the printer accepts in its current state"`
@@ -241,19 +308,20 @@ func (s *Server) addControlTools() {
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
-		Name:        "get_command",
-		Description: "Check the state of a command sent with send_command async=true.",
+		Name: "get_command",
+		Description: "Check the state of a command sent with send_command async=true. The state is the last thing " +
+			"that happened to it: CREATED (accepted), EMIT (sent to the printer), FINISHED, or REJECTED.",
 		Annotations: readOnly("Get command status"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getCommandInput) (*mcp.CallToolResult, any, error) {
 		p, err := s.connectPrinter(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
-		var out json.RawMessage
-		if err := s.connect.Get(ctx, printerPath(p.UUID, "commands", strconv.FormatInt(in.CommandID, 10)), nil, &out); err != nil {
+		res, err := s.commandProgress(ctx, p, in.CommandID)
+		if err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(out)
+		return jsonResult(res)
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
