@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- The MCP bundle no longer tells the agent Prusa Connect is unavailable there.
+  It reads the same saved session, so the camera, queue and history work
+  whenever an installed prusactl has signed in; only the sign-in needs a
+  terminal.
+- `control_print` takes pause, resume, or stop. "continue", an undocumented
+  second name for resume, is gone, and a bad action says so before the printer
+  is asked anything.
+- `get_queue` takes `limit` and `offset` like the other lists.
+- `api_request` reports which route it used, and the docs no longer claim every
+  tool does.
+- `get_printer` describes how the two routes name their fields differently, so
+  a result from one route isn't read as if it came from the other.
+- `upload_file` and `list_connect_files` say that uploading through Connect
+  leaves a copy in the team's storage, which only the Connect web app deletes.
+- Smaller: identical folder paths from both routes, `download_printer_file`
+  explains it needs the direct connection, and the sign-in prompt names the
+  host the password is actually sent to.
+
 ## 0.1.4 (2026-09-28)
 
 - Homebrew installs from source, so `brew` no longer prints a deprecation
