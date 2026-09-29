@@ -36,9 +36,10 @@ Setup never happens through these tools. `
 // where prusactl is running (a terminal, or the MCP bundle's settings).
 func instructionsFor() string {
 	if hint.Managed() {
-		return instructions + "The user sets the printer's address and PrusaLink password in this extension's settings. " +
-			"Prusa Connect needs a separate installed copy of prusactl, so its features (camera, dialogs, queue, history) " +
-			"are unavailable here. If a tool says something isn't set up, tell the user which setting to fill in."
+		return instructions + "The user sets the printer's address and PrusaLink password in this extension's settings " +
+			"(or with \"prusactl setup\", if they have prusactl installed). Prusa Connect can't be signed in to from here, " +
+			"but a session saved by an installed prusactl is used automatically; connection_status says whether one is " +
+			"available. If a tool says something isn't set up, tell the user which setting to fill in."
 	}
 	return instructions + `It happens in a terminal: "prusactl setup" for the direct route (the password shown on the printer's screen), ` +
 		`"prusactl login" for Prusa Connect. If a tool says one isn't set up, tell the user which command to run.`

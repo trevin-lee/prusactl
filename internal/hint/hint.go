@@ -30,7 +30,9 @@ func WrongSecret() string {
 // needs a terminal, and the session is kept per installed copy.
 func Connect() string {
 	if Managed() {
-		return "sign in with `prusactl login` from an installed copy of prusactl (this extension reaches the printer directly only)"
+		// The bundle has no terminal to sign in from, but it reads the same
+		// saved session, so an installed prusactl's sign-in works here.
+		return "sign in by running `prusactl login` in a terminal with prusactl installed; this extension then uses that saved session"
 	}
 	return "run `prusactl login` in a terminal"
 }
