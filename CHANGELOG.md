@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.6 (2026-09-28)
 
 - `connection_status` no longer hands the agent the whole Prusa Account record
   (email address, account id, terms dates, team organization ids). It returns
