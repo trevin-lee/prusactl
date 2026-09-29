@@ -128,6 +128,14 @@ type printerRef struct {
 	Via     string `json:"via,omitempty" jsonschema:"force a route: direct or connect; by default direct is used when the printer is reachable. Tools that only work one way (the camera, dialogs, the queue, history, run_gcode, download_printer_file) refuse the other route rather than ignoring this"`
 }
 
+// pagedRef is a printer reference for list tools, so every list pages the
+// same way.
+type pagedRef struct {
+	printerRef
+	Limit  int `json:"limit,omitempty" jsonschema:"how many entries to return; at most 500"`
+	Offset int `json:"offset,omitempty" jsonschema:"entries to skip, for the next page"`
+}
+
 // linkInfo is PrusaLink's /api/v1/info.
 type linkInfo struct {
 	Name     string `json:"name"`

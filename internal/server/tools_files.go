@@ -283,16 +283,16 @@ func (s *Server) addFileTools() {
 		Name:        "get_queue",
 		Description: "The printer's print queue in Prusa Connect: jobs waiting to print, in order, with their ids.",
 		Annotations: readOnly("Get print queue"),
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in printerRef) (*mcp.CallToolResult, any, error) {
-		p, err := s.connectPrinter(ctx, in)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in pagedRef) (*mcp.CallToolResult, any, error) {
+		p, err := s.connectPrinter(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
 		}
 		var out json.RawMessage
-		if err := s.connect.Get(ctx, printerPath(p.UUID, "queue"), url.Values{"limit": {"100"}}, &out); err != nil {
+		if err := s.connect.Get(ctx, printerPath(p.UUID, "queue"), pageQuery(min(max(in.Limit, 0), 500), in.Offset, 100), &out); err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(out)
+		return jsonResult(withVia(target{name: p.Name, connect: p}, map[string]any{"queue": out}))
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
