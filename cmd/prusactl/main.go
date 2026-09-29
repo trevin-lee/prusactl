@@ -147,7 +147,7 @@ func setup(ctx context.Context, args []string) error {
 	}
 	user, apiKey, fromStdin := opts.str("user"), opts.on("api-key"), opts.on("password-stdin")
 	if opts.on("forget") {
-		cfg, err := link.LoadConfig()
+		cfg, err := link.SavedConfig() // what setup saved, not PRUSACTL_* overrides
 		if errors.Is(err, link.ErrNotConfigured) {
 			fmt.Println("No printer is set up.")
 			return nil
@@ -208,11 +208,19 @@ func setup(ctx context.Context, args []string) error {
 	if _, err := link.New(cfg, pass).Get(vctx, "/api/v1/info", &info); err != nil {
 		return fmt.Errorf("checking the printer: %w", err)
 	}
+	prev, prevErr := link.SavedConfig()
 	if err := cfg.SaveSecret(pass); err != nil {
 		return fmt.Errorf("saving the printer's secret: %w", err)
 	}
 	if err := link.SaveConfig(cfg); err != nil {
 		return err
+	}
+	// The direct route holds one printer: remove the secret this setup
+	// replaced, so a changed address doesn't leave a password behind.
+	if prevErr == nil && !prev.SameSecret(cfg) {
+		if err := prev.DeleteSecret(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: couldn't remove the old saved secret for %s: %v\n", prev.Host, err)
+		}
 	}
 	name := info.Name
 	if name == "" {
@@ -223,6 +231,9 @@ func setup(ctx context.Context, args []string) error {
 		kind = "API key"
 	}
 	fmt.Printf("Connected to %s at %s. The %s is saved in %s.\n", name, host, kind, secret.Where())
+	if prevErr == nil && prev.Host != cfg.Host {
+		fmt.Printf("This replaces %s: prusactl reaches one printer directly (others work through Prusa Connect).\n", prev.Host)
+	}
 	return nil
 }
 

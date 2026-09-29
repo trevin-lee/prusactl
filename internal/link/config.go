@@ -131,6 +131,44 @@ func SaveConfig(cfg Config) error {
 	return os.WriteFile(path, append(b, '\n'), 0o600)
 }
 
+// SavedConfig returns the printer saved by `prusactl setup`, ignoring the
+// PRUSACTL_* overrides, or ErrNotConfigured.
+func SavedConfig() (Config, error) {
+	path, err := configPath()
+	if err != nil {
+		return Config{}, err
+	}
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return Config{}, ErrNotConfigured
+	}
+	if err != nil {
+		return Config{}, err
+	}
+	var f fileFormat
+	if err := json.Unmarshal(b, &f); err != nil {
+		return Config{}, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if f.Printer == nil || f.Printer.Host == "" {
+		return Config{}, ErrNotConfigured
+	}
+	cfg := *f.Printer
+	if cfg.User == "" {
+		cfg.User = "maker"
+	}
+	if cfg.Auth == "" {
+		cfg.Auth = AuthDigest
+	}
+	return cfg, nil
+}
+
+// SameSecret reports whether two configs keep their secret in the same place.
+func (cfg Config) SameSecret(o Config) bool { return cfg.secretAccount() == o.secretAccount() }
+
+// DeleteSecret removes the stored password or API key for cfg. It is not an
+// error if there was none.
+func (cfg Config) DeleteSecret() error { return secret.Delete(cfg.secretAccount()) }
+
 // RemoveConfig forgets the printer and its secret.
 func RemoveConfig(cfg Config) error {
 	path, err := configPath()
