@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- `connection_status` no longer hands the agent the whole Prusa Account record
+  (email address, account id, terms dates, team organization ids). It returns
+  who is signed in and the default team, as its description always promised.
+- The MCP bundle works on ARM Linux, such as a Raspberry Pi; it previously
+  installed and then failed to start there.
+- Every list pages the same way: one cap (500), shared field descriptions, and
+  `next_offset` on Connect-backed lists too. `list_jobs` with a huge limit now
+  returns a page instead of "result too large".
+- `get_queue`, `add_to_queue` and `remove_from_queue` answer in one shape, and
+  `get_queue` no longer reports a route it can't vary.
+- The README discloses that `run_gcode` leaves `/usb/prusactl-macro.gcode` on
+  the printer, lists `prusactl version`, and qualifies "no browser involved".
+
 ## 0.1.5 (2026-09-28)
 
 - The MCP bundle no longer tells the agent Prusa Connect is unavailable there.
