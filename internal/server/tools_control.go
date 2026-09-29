@@ -327,6 +327,9 @@ func (s *Server) addControlTools() {
 		if strings.TrimSpace(in.Gcode) == "" {
 			return nil, nil, fmt.Errorf("gcode is empty")
 		}
+		if err := checkVia(in.printerRef, "direct"); err != nil {
+			return nil, nil, err
+		}
 		in.Via = "direct"
 		t, err := s.route(ctx, in.printerRef)
 		if err != nil {

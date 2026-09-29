@@ -110,7 +110,7 @@ func textResult(format string, args ...any) (*mcp.CallToolResult, any, error) {
 // printerRef is embedded in every per-printer tool input.
 type printerRef struct {
 	Printer string `json:"printer,omitempty" jsonschema:"printer name, serial number, or Connect UUID; optional with a single printer"`
-	Via     string `json:"via,omitempty" jsonschema:"force a route: direct or connect; by default direct is used when the printer is reachable"`
+	Via     string `json:"via,omitempty" jsonschema:"force a route: direct or connect; by default direct is used when the printer is reachable. Tools that only work one way (the camera, dialogs, the queue, history, run_gcode, download_printer_file) refuse the other route rather than ignoring this"`
 }
 
 // linkInfo is PrusaLink's /api/v1/info.
@@ -227,6 +227,26 @@ func (i *linkInfo) matches(ref, host string) bool {
 		}
 	}
 	return false
+}
+
+// checkVia validates ref.Via for a tool that can only use one route (only is
+// "direct" or "connect"), so a forced route is refused rather than ignored.
+func checkVia(ref printerRef, only string) error {
+	via := strings.ToLower(strings.TrimSpace(ref.Via))
+	switch via {
+	case "", only:
+		return nil
+	case "direct", "connect":
+		return fmt.Errorf("this only works through %s, so via=%s isn't possible here; leave via out", routeName(only), via)
+	}
+	return fmt.Errorf("via must be direct or connect (got %q)", ref.Via)
+}
+
+func routeName(via string) string {
+	if via == "direct" {
+		return "the direct connection (PrusaLink)"
+	}
+	return "Prusa Connect"
 }
 
 // route picks direct or Connect for a printer reference.
@@ -380,6 +400,9 @@ func (s *Server) resolvePrinter(ctx context.Context, ref string) (printerSummary
 
 // connectPrinter resolves the printer for tools only Connect can serve.
 func (s *Server) connectPrinter(ctx context.Context, ref printerRef) (printerSummary, error) {
+	if err := checkVia(ref, "connect"); err != nil {
+		return printerSummary{}, err
+	}
 	if !s.session.SignedIn() {
 		return printerSummary{}, errors.New("this needs Prusa Connect, which isn't signed in: ask the user to run `prusactl login` in a terminal")
 	}

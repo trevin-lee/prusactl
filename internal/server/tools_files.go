@@ -160,6 +160,9 @@ func (s *Server) addFileTools() {
 			then = "none"
 		case "none", "print":
 		case "queue":
+			if err := checkVia(in.printerRef, "connect"); err != nil {
+				return nil, nil, fmt.Errorf("then=queue: %w", err)
+			}
 			in.Via = "connect" // the queue lives in Connect
 		default:
 			return nil, nil, fmt.Errorf("then must be none, print, or queue (got %q)", in.Then)
@@ -223,6 +226,9 @@ func (s *Server) addFileTools() {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in downloadInput) (*mcp.CallToolResult, any, error) {
 		if !filepath.IsAbs(in.LocalPath) {
 			return nil, nil, fmt.Errorf("local_path must be absolute (got %q)", in.LocalPath)
+		}
+		if err := checkVia(in.printerRef, "direct"); err != nil {
+			return nil, nil, err
 		}
 		in.Via = "direct"
 		t, err := s.route(ctx, in.printerRef)

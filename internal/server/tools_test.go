@@ -221,3 +221,32 @@ func TestStartPrintRefusesABusyPrinter(t *testing.T) {
 		t.Fatal("started a print on a busy printer")
 	}
 }
+
+// via forces a route, so a tool that can only use one must refuse the other
+// instead of quietly ignoring it, and a bad value is an error everywhere.
+func TestViaIsRefusedWhenImpossible(t *testing.T) {
+	cs := connectTools(t, &fakePrinter{state: "IDLE", files: 1})
+	for _, tc := range []struct {
+		tool, via, want string
+		args            map[string]any
+	}{
+		{tool: "run_gcode", via: "connect", want: "only works through the direct connection", args: map[string]any{"gcode": "M115"}},
+		{tool: "download_printer_file", via: "connect", want: "only works through the direct connection",
+			args: map[string]any{"path": "/usb/x.bgcode", "local_path": "/tmp/x.bgcode"}},
+		{tool: "get_camera_snapshot", via: "direct", want: "only works through Prusa Connect"},
+		{tool: "get_queue", via: "direct", want: "only works through Prusa Connect"},
+		{tool: "respond_to_dialog", via: "direct", want: "only works through Prusa Connect", args: map[string]any{"button": "Yes"}},
+		{tool: "get_printer", via: "bogus", want: "via must be direct or connect"},
+		{tool: "get_queue", via: "bogus", want: "via must be direct or connect"},
+		{tool: "run_gcode", via: "bogus", want: "via must be direct or connect", args: map[string]any{"gcode": "M115"}},
+	} {
+		args := map[string]any{"via": tc.via}
+		for k, v := range tc.args {
+			args[k] = v
+		}
+		text, isErr := call(t, cs, tc.tool, args)
+		if !isErr || !strings.Contains(text, tc.want) {
+			t.Errorf("%s via=%s: %q, want %q", tc.tool, tc.via, text, tc.want)
+		}
+	}
+}
