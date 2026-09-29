@@ -102,9 +102,11 @@ func (s *Server) addFileTools() {
 		case dir == "":
 			err = s.connect.Get(ctx, printerPath(t.connect.UUID, "storages"), nil, &out)
 		default:
-			q := pageQuery(in.Limit, in.Offset, 50)
+			q := pageQuery(min(max(in.Limit, 0), 500), in.Offset, 50)
 			q.Set("path", dir)
-			err = s.connect.Get(ctx, printerPath(t.connect.UUID, "files"), q, &out)
+			if err = s.connect.Get(ctx, printerPath(t.connect.UUID, "files"), q, &out); err == nil {
+				out = compactConnectFolder(out)
+			}
 		}
 		if err != nil {
 			return nil, nil, err
@@ -461,6 +463,62 @@ func compactFolder(dir string, raw json.RawMessage, limit, offset int) json.RawM
 	}
 	res := map[string]any{"folder": base, "entries": entries, "total": total}
 	if next := offset + len(page); next < total {
+		res["next_offset"] = next
+	}
+	b, err := json.Marshal(res)
+	if err != nil {
+		return raw
+	}
+	return b
+}
+
+// compactConnectFolder turns Connect's folder listing into the same page shape
+// compactFolder produces, so both routes answer alike. Connect does the paging
+// itself and reports it under "pager"; hashes are kept for add_to_queue.
+func compactConnectFolder(raw json.RawMessage) json.RawMessage {
+	var folder struct {
+		Path  string `json:"path"`
+		Files *[]struct {
+			Name        string `json:"name"`
+			DisplayName string `json:"display_name"`
+			Path        string `json:"path"`
+			Type        string `json:"type"`
+			Hash        string `json:"hash"`
+			Size        *int64 `json:"size,omitempty"`
+			MTimestamp  int64  `json:"m_timestamp"`
+			RO          bool   `json:"read_only"`
+		} `json:"files"`
+		Pager struct {
+			Limit  int `json:"limit"`
+			Offset int `json:"offset"`
+			Total  int `json:"total"`
+		} `json:"pager"`
+	}
+	if json.Unmarshal(raw, &folder) != nil || folder.Files == nil {
+		return raw
+	}
+	entries := make([]map[string]any, 0, len(*folder.Files))
+	for _, f := range *folder.Files {
+		e := map[string]any{"path": f.Path, "name": f.DisplayName, "type": f.Type}
+		if f.DisplayName == "" {
+			e["name"] = f.Name
+		}
+		if f.MTimestamp > 0 {
+			e["modified"] = time.Unix(f.MTimestamp, 0).Format(time.DateTime)
+		}
+		if f.Size != nil {
+			e["size"] = *f.Size
+		}
+		if f.RO {
+			e["read_only"] = true
+		}
+		if f.Hash != "" {
+			e["hash"] = f.Hash
+		}
+		entries = append(entries, e)
+	}
+	res := map[string]any{"folder": folder.Path, "entries": entries, "total": folder.Pager.Total}
+	if next := folder.Pager.Offset + len(entries); next < folder.Pager.Total {
 		res["next_offset"] = next
 	}
 	b, err := json.Marshal(res)
