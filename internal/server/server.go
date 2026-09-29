@@ -24,7 +24,7 @@ import (
 
 const instructions = `Controls the user's Prusa 3D printer.
 
-Two routes reach it. Direct: the printer's own API on the local network (PrusaLink), used whenever the printer is reachable. Prusa Connect: Prusa's cloud service, used when the printer isn't reachable directly (e.g. the user is away) and for things only Connect offers: camera, on-screen dialogs, the print queue, history, events, and firmware commands such as heating and moving. Tool results say which route they used ("via").
+Two routes reach it. Direct: the printer's own API on the local network (PrusaLink), used whenever the printer is reachable. Prusa Connect: Prusa's cloud service, used when the printer isn't reachable directly (e.g. the user is away) and for things only Connect offers: camera, on-screen dialogs, the print queue, history, events, and firmware commands such as heating and moving. Tools that can take either route say which one they used ("via"); the rest are named above and always use the route they need.
 
 Start with connection_status or get_printer. Printer arguments accept a name, serial number, or Connect UUID, and can be omitted with a single printer.
 

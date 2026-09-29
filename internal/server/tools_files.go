@@ -153,7 +153,8 @@ func (s *Server) addFileTools() {
 			"network the file goes straight to the printer; through Connect it is stored in Connect and copied to the " +
 			"printer in the background (get_transfers shows progress); there then=print puts it first in the queue and " +
 			"marks the printer ready, and Connect starts it once the file arrives. then=print is refused unless the " +
-			"printer is idle. Before then=print, confirm the plate is clear.",
+			"printer is idle. Before then=print, confirm the plate is clear. Uploading through Connect also leaves a " +
+			"copy in the team's Connect storage, which only the Connect web app can delete.",
 		Annotations: mutating("Upload print file", false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in uploadInput) (*mcp.CallToolResult, any, error) {
 		then := strings.ToLower(strings.TrimSpace(in.Then))
@@ -384,8 +385,10 @@ func (s *Server) addFileTools() {
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
-		Name:        "list_connect_files",
-		Description: "Files stored in Prusa Connect's cloud storage for a team, with the hashes add_to_queue takes.",
+		Name: "list_connect_files",
+		Description: "Files stored in Prusa Connect's cloud storage for a team, with the hashes add_to_queue takes. " +
+			"These count against the team's storage quota and can only be deleted in the Connect web app under Files; " +
+			"delete_printer_files removes files from the printer, not from Connect.",
 		Annotations: readOnly("List Connect files"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in connectFilesInput) (*mcp.CallToolResult, any, error) {
 		team := in.TeamID

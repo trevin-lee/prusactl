@@ -54,6 +54,10 @@ func (s *Server) addAPITool() {
 		if u.Scheme != "" || u.Host != "" || strings.Contains(u.Path, "..") || (!direct && !strings.HasPrefix(u.Path, "/app/")) {
 			return nil, nil, fmt.Errorf("path must start with /api/ (printer) or /app/ (Prusa Connect), got %q", in.Path)
 		}
+		route := "connect"
+		if direct {
+			route = "direct"
+		}
 		q := u.Query()
 		for k, v := range in.Query {
 			q.Set(k, v)
@@ -97,13 +101,13 @@ func (s *Server) addAPITool() {
 		case strings.HasPrefix(ct, "image/"):
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.ImageContent{Data: body, MIMEType: ct}}}, nil, nil
 		case len(body) == 0:
-			return jsonResult(map[string]any{"status": resp.StatusCode})
+			return jsonResult(map[string]any{"status": resp.StatusCode, "via": route})
 		case json.Valid(body):
-			return jsonResult(map[string]any{"status": resp.StatusCode, "body": redactRaw(body)})
+			return jsonResult(map[string]any{"status": resp.StatusCode, "via": route, "body": redactRaw(body)})
 		case utf8.Valid(body):
-			return jsonResult(map[string]any{"status": resp.StatusCode, "content_type": ct, "body": redact.Text(string(body))})
+			return jsonResult(map[string]any{"status": resp.StatusCode, "via": route, "content_type": ct, "body": redact.Text(string(body))})
 		default:
-			return jsonResult(map[string]any{"status": resp.StatusCode, "content_type": ct, "bytes": len(body)})
+			return jsonResult(map[string]any{"status": resp.StatusCode, "via": route, "content_type": ct, "bytes": len(body)})
 		}
 	})
 }

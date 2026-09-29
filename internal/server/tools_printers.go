@@ -120,9 +120,11 @@ func (s *Server) addPrinterTools() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "get_printer",
 		Description: "Live status of the printer: state, temperatures and targets, axis positions, fans, " +
-			"speed/flow, and the current job (progress, time remaining, file). Through Prusa Connect it also " +
-			"includes filament, nozzle, settings, and dialog_info: the dialog currently on the printer's screen, " +
-			"which respond_to_dialog can answer.",
+			"speed/flow, and the current job (progress, time remaining, file). The two routes report the printer's " +
+			"own JSON, so the field names differ: directly you get status.printer.state with temperatures beside it " +
+			"plus info and job, while through Connect you get status.connect_state with temperatures under temp and " +
+			"the job under job_info, as well as filament, nozzle, settings, and dialog_info (the dialog on the " +
+			"printer's screen, which respond_to_dialog answers). Read \"via\" in the result before picking fields.",
 		Annotations: readOnly("Get printer status"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in printerRef) (*mcp.CallToolResult, any, error) {
 		t, err := s.route(ctx, in)

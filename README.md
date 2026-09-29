@@ -169,8 +169,9 @@ prusactl reaches the printer two ways, and each tool picks one:
 | Camera, on-screen dialogs, queue, history, events | ❌ | ✅ |
 
 The direct route is used whenever the printer answers. Otherwise, or for
-Connect-only features, the tool goes through Connect. Every result says which
-route it used.
+Connect-only features, the tool goes through Connect. Results from tools that
+can take either route say which one they used (`via`); the rest always use the
+route their feature needs.
 
 ### Signing in to Prusa Connect
 
@@ -241,6 +242,10 @@ and `prusactl help completion` shows how to add it otherwise.
 API key instead of the password, and `--password-stdin` reads the secret from a
 pipe.
 
+The CLI sets prusactl up and reads from the printer; it deliberately has no
+commands that print or write to it. Ask the agent for those, or use `prusactl
+api` for a one-off call.
+
 `prusactl api` masks API keys and tokens in responses (Connect's printer record
 carries the PrusaLink and Connect keys), so its output is safe to paste or hand
 to an agent. `--raw` shows them.
@@ -266,7 +271,7 @@ to an agent. `--raw` shows them.
   Connect route. The direct route uses Prusa's documented
   [PrusaLink API](https://github.com/prusa3d/Prusa-Link-Web/blob/master/spec/openapi.yaml).
   If either changes, prusactl says so instead of misbehaving: "Prusa Connect
-  answered in a way prusactl 0.1.3 doesn't recognize: …", naming the request
+  answered in a way this version of prusactl doesn't recognize: …", naming the request
   and what was unexpected. Updating prusactl usually fixes it; if the newest
   version doesn't, report the message as an issue.
 
