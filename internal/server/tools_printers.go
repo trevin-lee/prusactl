@@ -41,9 +41,7 @@ type snapshotInput struct {
 }
 
 type eventsInput struct {
-	printerRef
-	Limit  int `json:"limit,omitempty" jsonschema:"number of events, newest first; default 20"`
-	Offset int `json:"offset,omitempty"`
+	pagedRef // newest first; default 20
 }
 
 type telemetryInput struct {
@@ -252,13 +250,55 @@ func (s *Server) addPrinterTools() {
 		if err := s.connect.Get(ctx, printerPath(p.UUID, "events"), pageQuery(in.Limit, in.Offset, 20), &out); err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(out)
+		return jsonResult(withNextOffset(out))
 	})
 }
 
+// withNextOffset adds next_offset to a Connect list response when more rows
+// remain, so every list says "there is more" the same way the printer's own
+// file listings do. Connect reports it inside a "pager" object, which is kept.
+func withNextOffset(raw json.RawMessage) json.RawMessage {
+	var body map[string]json.RawMessage
+	if json.Unmarshal(raw, &body) != nil {
+		return raw
+	}
+	var pager struct {
+		Limit  int `json:"limit"`
+		Offset int `json:"offset"`
+		Total  int `json:"total"`
+	}
+	if json.Unmarshal(body["pager"], &pager) != nil || pager.Limit <= 0 {
+		return raw
+	}
+	next := pager.Offset + pager.Limit
+	if next >= pager.Total {
+		return raw
+	}
+	b, err := json.Marshal(next)
+	if err != nil {
+		return raw
+	}
+	body["next_offset"] = b
+	out, err := json.Marshal(body)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// maxPage caps every list, so a huge limit is a page rather than a result too
+// big to return.
+const maxPage = 500
+
 func pageQuery(limit, offset, def int) url.Values {
-	if limit <= 0 {
+	switch {
+	case limit <= 0:
 		limit = def
+	case limit > maxPage:
+		limit = maxPage
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	q := url.Values{"limit": {strconv.Itoa(limit)}}
 	if offset > 0 {

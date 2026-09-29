@@ -10,10 +10,8 @@ import (
 )
 
 type listJobsInput struct {
-	printerRef
-	States []string `json:"states,omitempty" jsonschema:"filter by job state, e.g. PRINTING, FIN_OK, FIN_ERROR, FIN_STOPPED"`
-	Limit  int      `json:"limit,omitempty" jsonschema:"default 10"`
-	Offset int      `json:"offset,omitempty"`
+	pagedRef          // default 10
+	States   []string `json:"states,omitempty" jsonschema:"filter by job state, e.g. PRINTING, FIN_OK, FIN_ERROR, FIN_STOPPED"`
 }
 
 type jobInput struct {
@@ -39,7 +37,7 @@ func (s *Server) addJobTools() {
 		if err := s.connect.Get(ctx, printerPath(p.UUID, "jobs"), q, &out); err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(out)
+		return jsonResult(withNextOffset(out))
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{

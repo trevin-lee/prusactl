@@ -23,8 +23,8 @@ import (
 type listFilesInput struct {
 	printerRef
 	Path   string `json:"path,omitempty" jsonschema:"folder on the printer, e.g. /usb or /usb/parts; omit to list the printer's storages"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"how many entries to return; default 50, at most 500"`
-	Offset int    `json:"offset,omitempty" jsonschema:"entries to skip, for the next page (see next_offset)"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"how many entries to return; at most 500"`
+	Offset int    `json:"offset,omitempty" jsonschema:"entries to skip, for the next page"`
 }
 
 type uploadInput struct {
@@ -71,9 +71,8 @@ type queueJobInput struct {
 }
 
 type connectFilesInput struct {
-	TeamID int64 `json:"team_id,omitempty" jsonschema:"team whose storage to list; default is the team of the first printer"`
-	Limit  int   `json:"limit,omitempty" jsonschema:"default 50"`
-	Offset int   `json:"offset,omitempty"`
+	pagedRef       // default 50
+	TeamID   int64 `json:"team_id,omitempty" jsonschema:"team whose storage to list; default is the team of the first printer"`
 }
 
 func (s *Server) addFileTools() {
@@ -102,7 +101,7 @@ func (s *Server) addFileTools() {
 		case dir == "":
 			err = s.connect.Get(ctx, printerPath(t.connect.UUID, "storages"), nil, &out)
 		default:
-			q := pageQuery(min(max(in.Limit, 0), 500), in.Offset, 50)
+			q := pageQuery(in.Limit, in.Offset, 50)
 			q.Set("path", dir)
 			if err = s.connect.Get(ctx, printerPath(t.connect.UUID, "files"), q, &out); err == nil {
 				out = compactConnectFolder(out)
@@ -404,7 +403,7 @@ func (s *Server) addFileTools() {
 		if err := s.connect.Get(ctx, path, pageQuery(in.Limit, in.Offset, 50), &out); err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(out)
+		return jsonResult(withNextOffset(out))
 	})
 }
 
