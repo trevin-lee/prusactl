@@ -264,6 +264,11 @@ func (s *Server) addControlTools() {
 		Annotations: mutating("Pause/resume/stop print", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in controlPrintInput) (*mcp.CallToolResult, any, error) {
 		action := strings.ToLower(strings.TrimSpace(in.Action))
+		switch action {
+		case "pause", "resume", "stop":
+		default:
+			return nil, nil, actionError(in.Action)
+		}
 		t, err := s.route(ctx, in.printerRef)
 		if err != nil {
 			return nil, nil, err
@@ -281,31 +286,27 @@ func (s *Server) addControlTools() {
 				return nil, nil, fmt.Errorf("%s has no job to %s", t.name, action)
 			}
 			id := strconv.FormatInt(job.ID, 10)
-			// Buddy firmware's PrusaLink implements pause, resume (from PAUSED only)
-			// and stop; "continue" from the published spec is answered with 400.
-			cmd := action
-			if cmd == "continue" {
-				cmd = "resume"
-			}
-			req := link.Request{Method: http.MethodPut, Path: "/api/v1/job/" + id + "/" + cmd}
+			// Buddy firmware's PrusaLink implements pause, resume (from PAUSED
+			// only) and stop; the spec's "continue" is answered with 400.
+			req := link.Request{Method: http.MethodPut, Path: "/api/v1/job/" + id + "/" + action}
 			switch action {
-			case "pause", "resume", "continue":
+			case "pause", "resume":
 				if job.State == "ATTENTION" || (action != "pause" && job.State != "PAUSED") {
 					return nil, nil, fmt.Errorf("%s's job is %s; the printer only resumes from PAUSED over the local network. A question on its screen must be answered there, or through Prusa Connect (respond_to_dialog)", t.name, job.State)
 				}
 			case "stop":
 				req = link.Request{Method: http.MethodDelete, Path: "/api/v1/job/" + id}
 			default:
-				return nil, nil, fmt.Errorf("action must be pause, resume, continue, or stop (got %q)", in.Action)
+				return nil, nil, actionError(in.Action)
 			}
 			if _, err := s.direct().JSON(ctx, req, nil); err != nil {
 				return nil, nil, err
 			}
 			return jsonResult(withVia(t, map[string]any{"action": action, "job_id": job.ID, "state_before": job.State}))
 		}
-		cmd := map[string]string{"pause": "PAUSE_PRINT", "resume": "RESUME_PRINT", "continue": "RESUME_PRINT", "stop": "STOP_PRINT"}[action]
+		cmd := map[string]string{"pause": "PAUSE_PRINT", "resume": "RESUME_PRINT", "stop": "STOP_PRINT"}[action]
 		if cmd == "" {
-			return nil, nil, fmt.Errorf("action must be pause, resume, continue, or stop (got %q)", in.Action)
+			return nil, nil, actionError(in.Action)
 		}
 		res, err := s.runCommand(ctx, t.connect, cmd, nil, false, 0)
 		if err != nil {
@@ -401,4 +402,13 @@ func (s *Server) addControlTools() {
 		}
 		return jsonResult(map[string]any{"dialog": dialog, "pressed": button, "result": res})
 	})
+}
+
+// actionError explains control_print's action, naming "continue" only to point
+// at the action that replaces it.
+func actionError(got string) error {
+	if strings.EqualFold(strings.TrimSpace(got), "continue") {
+		return fmt.Errorf("action must be pause, resume, or stop; to carry on a paused print use resume")
+	}
+	return fmt.Errorf("action must be pause, resume, or stop (got %q)", got)
 }

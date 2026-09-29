@@ -194,11 +194,16 @@ func TestRunGcodeUploadsAMacroOnlyWhenSafe(t *testing.T) {
 func TestControlPrintResumesOnlyFromPaused(t *testing.T) {
 	fp := &fakePrinter{state: "PAUSED", jobState: "PAUSED"}
 	cs := connectTools(t, fp)
-	if text, isErr := call(t, cs, "control_print", map[string]any{"action": "continue"}); isErr {
+	if text, isErr := call(t, cs, "control_print", map[string]any{"action": "resume"}); isErr {
 		t.Fatal(text)
 	}
 	if !fp.called("PUT /api/v1/job/7/resume") {
-		t.Fatalf("continue didn't map to resume: %v", fp.calls)
+		t.Fatalf("resume didn't reach the printer: %v", fp.calls)
+	}
+	// "continue" was an undocumented second name for resume; it now points there.
+	text, isErr := call(t, cs, "control_print", map[string]any{"action": "continue"})
+	if !isErr || !strings.Contains(text, "use resume") {
+		t.Errorf("continue: %q", text)
 	}
 
 	fp2 := &fakePrinter{state: "ATTENTION", jobState: "ATTENTION"}
