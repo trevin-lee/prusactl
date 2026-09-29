@@ -311,7 +311,32 @@ func status(ctx context.Context, srv *server.Server, lc *link.Client) error {
 	} else {
 		fmt.Printf("Prusa Connect:     not signed in (%v)\n", orText(cloud["error"], cloud["setup"]))
 	}
+
+	// Without the direct route, show the printers as Prusa Connect sees them.
+	if direct["reachable"] != true && cloud["signed_in"] == true {
+		printers, err := srv.ConnectPrinters(ctx)
+		if err != nil {
+			fmt.Printf("Printer (Connect): %v\n", err)
+		}
+		for _, p := range printers {
+			fmt.Printf("Printer (Connect): %v: %s\n", p["name"], connectLine(p))
+		}
+	}
 	return nil
+}
+
+// connectLine summarizes a printer from Prusa Connect's printer list.
+func connectLine(p map[string]any) string {
+	line := fmt.Sprint(p["connect_state"])
+	if job, ok := p["job_info"].(map[string]any); ok {
+		if pr, ok := job["progress"]; ok {
+			line += fmt.Sprintf(" %v%%", pr)
+		}
+	}
+	if t, ok := p["temp"].(map[string]any); ok {
+		line += fmt.Sprintf(", nozzle %s/%s°C, bed %s/%s°C", num(t["temp_nozzle"]), num(t["target_nozzle"]), num(t["temp_bed"]), num(t["target_bed"]))
+	}
+	return line
 }
 
 func orText(a, b any) any {

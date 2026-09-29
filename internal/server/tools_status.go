@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -43,6 +44,23 @@ func (s *Server) Status(ctx context.Context) map[string]any {
 		cloud["setup"] = "optional: run `prusactl login` in a terminal for remote access, camera, dialogs, queue and history"
 	}
 	return map[string]any{"direct": direct, "connect": cloud}
+}
+
+// ConnectPrinters returns the account's printers as Prusa Connect lists them
+// (name, connect_state, temp, ...), for the CLI's status.
+func (s *Server) ConnectPrinters(ctx context.Context) ([]map[string]any, error) {
+	raws, err := s.listPrinters(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, 0, len(raws))
+	for _, r := range raws {
+		var p map[string]any
+		if json.Unmarshal(r, &p) == nil {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
 func (s *Server) addStatusTools() {
