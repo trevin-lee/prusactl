@@ -67,6 +67,12 @@ func (s *Server) directStatus(ctx context.Context) (map[string]any, error) {
 	if hasJob {
 		out["job"] = redactRaw(job)
 	}
+	// The same few facts in the same place as the Connect route reports them.
+	var jobMap map[string]any
+	if hasJob {
+		jobMap = decode(job)
+	}
+	out["summary"] = summarizeDirect(decode(status), jobMap)
 	return out, nil
 }
 
@@ -117,12 +123,12 @@ func (s *Server) addPrinterTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "get_printer",
-		Description: "Live status of the printer: state, temperatures and targets, axis positions, fans, " +
-			"speed/flow, and the current job (progress, time remaining, file). The two routes report the printer's " +
-			"own JSON, so the field names differ: directly you get status.printer.state with temperatures beside it " +
-			"plus info and job, while through Connect you get status.connect_state with temperatures under temp and " +
-			"the job under job_info, as well as filament, nozzle, settings, and dialog_info (the dialog on the " +
-			"printer's screen, which respond_to_dialog answers). Read \"via\" in the result before picking fields.",
+		Description: "Live status of the printer. \"summary\" holds the common facts in the same place whichever " +
+			"route was used: state, nozzle/bed/chamber temperatures with their targets, and the current job's name, " +
+			"progress and time remaining. Everything the route itself reported is kept alongside it, so through Prusa " +
+			"Connect that also includes axis positions, fans, speed/flow, filament, nozzle, settings and dialog_info " +
+			"(the dialog on the printer's screen, which respond_to_dialog answers), and directly it includes the " +
+			"printer's own status, info and job records.",
 		Annotations: readOnly("Get printer status"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in printerRef) (*mcp.CallToolResult, any, error) {
 		t, err := s.route(ctx, in)
@@ -140,7 +146,10 @@ func (s *Server) addPrinterTools() {
 		if err := s.connect.Get(ctx, printerPath(t.connect.UUID), nil, &out); err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(withVia(t, map[string]any{"status": redactRaw(out)}))
+		return jsonResult(withVia(t, map[string]any{
+			"status":  redactRaw(out),
+			"summary": summarizeConnect(decode(out)),
+		}))
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
