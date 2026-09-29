@@ -23,6 +23,11 @@
   ignored, printing the wrong kind of output without a word.
 - Errors a person reads no longer name MCP tools they can't run, and a file the
   printer holds open explains itself instead of only saying "File is busy".
+- `prusactl printers` lists the printer reached directly, which it used to skip,
+  and says which route each one came from.
+- The tests run on Windows in CI. Four of them used to write into the real
+  prusactl directory there, overwriting the config and credentials of whoever
+  ran them; nothing had run them on Windows in 36 commits.
 
 ## 0.1.6 (2026-09-28)
 
