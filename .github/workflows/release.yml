@@ -19,13 +19,16 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Build, release, and update the Homebrew tap
+      - name: Build and release
         uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Update the Homebrew tap
+        run: python3 scripts/tap.py "$GITHUB_REF_NAME"
+        env:
           TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
       - name: Build the MCP bundle
         run: python3 scripts/mcpb.py "$GITHUB_REF_NAME"

@@ -60,32 +60,3 @@ release:
     **Install:** `brew install trevin-lee/tap/prusactl`, `go install github.com/trevin-lee/prusactl/cmd/prusactl@{{ .Tag }}`, or download a binary below.
     `prusactl.mcpb` is a one-click MCP bundle for clients that support MCPB.
     Setup, and connecting an AI agent: see the [README](https://github.com/trevin-lee/prusactl#install).
-
-homebrew_casks:
-  - name: prusactl
-    binaries: [prusactl]
-    completions:
-      bash: completions/prusactl.bash
-      zsh: completions/_prusactl
-      fish: completions/prusactl.fish
-    homepage: https://github.com/trevin-lee/prusactl
-    description: Hand your Prusa 3D printer to an AI agent (MCP server, with a CLI to set it up)
-    license: MIT
-    repository:
-      owner: trevin-lee
-      name: homebrew-tap
-      branch: main
-      git:
-        url: git@github.com:trevin-lee/homebrew-tap.git
-        private_key: "{{ .Env.TAP_DEPLOY_KEY }}"
-    commit_author:
-      name: prusactl release bot
-      email: 134039857+trevin-lee@users.noreply.github.com
-    commit_msg_template: "feat: prusactl {{ .Tag }}"
-    hooks:
-      post:
-        # The binaries aren't notarized; clear the quarantine flag so macOS runs them.
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/prusactl"]
-          end

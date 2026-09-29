@@ -52,8 +52,14 @@ through Prusa Connect, so those need `prusactl login`; the rest works directly.
 brew install trevin-lee/tap/prusactl
 ```
 
-Tab completion for bash, zsh, and fish comes with it. Update with
-`brew upgrade prusactl`. To remove it, see [Uninstall](#uninstall).
+This builds prusactl from source, so Homebrew installs Go first if you don't
+have it; the build itself takes seconds. Tab completion for bash, zsh, and fish
+comes with it. Update with `brew upgrade prusactl`. To remove it, see
+[Uninstall](#uninstall).
+
+> Installed prusactl 0.1.3 or earlier? That was a cask. Switch once with
+> `brew uninstall --cask prusactl && brew update && brew install trevin-lee/tap/prusactl`.
+> Your saved printer and Prusa Connect session are kept.
 
 **A downloaded binary:** get the archive for your system from
 [Releases](https://github.com/trevin-lee/prusactl/releases): macOS (universal),
