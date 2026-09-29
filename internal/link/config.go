@@ -13,10 +13,12 @@ import (
 	"github.com/trevin-lee/prusactl/internal/secret"
 
 	"github.com/trevin-lee/prusactl/internal/appdir"
+
+	"github.com/trevin-lee/prusactl/internal/hint"
 )
 
 // ErrNotConfigured means no printer has been set up for direct access.
-var ErrNotConfigured = errors.New("no printer set up for direct access: run `prusactl setup` in a terminal")
+var ErrNotConfigured = errors.New("no printer set up for direct access: " + hint.Printer())
 
 // Auth modes PrusaLink supports.
 const (
@@ -204,7 +206,7 @@ func (cfg Config) Secret() (string, error) {
 	}
 	s, err := secret.Get(cfg.secretAccount())
 	if errors.Is(err, secret.ErrNotFound) {
-		return "", fmt.Errorf("no saved password for %s: run `prusactl setup` again", cfg.Host)
+		return "", fmt.Errorf("no saved password for %s: %s", cfg.Host, hint.Printer())
 	}
 	return s, err
 }

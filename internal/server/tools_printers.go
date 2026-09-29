@@ -13,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/trevin-lee/prusactl/internal/connect"
+	"github.com/trevin-lee/prusactl/internal/hint"
 	"github.com/trevin-lee/prusactl/internal/redact"
 )
 
@@ -111,7 +112,7 @@ func (s *Server) addPrinterTools() {
 			out["connect"] = list
 		}
 		if len(out) == 0 {
-			return nil, nil, fmt.Errorf("nothing is set up yet: run `prusactl setup` (direct) or `prusactl login` (Prusa Connect) in a terminal")
+			return nil, nil, fmt.Errorf("nothing is set up yet: %s (direct), or %s", hint.Printer(), hint.Connect())
 		}
 		return jsonResult(out)
 	})

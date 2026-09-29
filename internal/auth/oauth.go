@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/trevin-lee/prusactl/internal/compat"
+
+	"github.com/trevin-lee/prusactl/internal/hint"
 )
 
 // These mirror window.ACCOUNT_URL / ACCOUNT_CLIENT_ID in
@@ -32,7 +34,7 @@ const (
 )
 
 // ErrNotLoggedIn means there is no usable refresh token; run the login flow.
-var ErrNotLoggedIn = errors.New("not signed in to Prusa Connect: run `prusactl login` in a terminal")
+var ErrNotLoggedIn = errors.New("not signed in to Prusa Connect: " + hint.Connect())
 
 // Config identifies the OAuth client.
 type Config struct {

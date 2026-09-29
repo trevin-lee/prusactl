@@ -9,6 +9,8 @@ import (
 
 	"github.com/trevin-lee/prusactl/internal/auth"
 	"github.com/trevin-lee/prusactl/internal/link"
+
+	"github.com/trevin-lee/prusactl/internal/hint"
 )
 
 // Status reports how the printer can be reached, for the CLI and MCP alike.
@@ -23,7 +25,7 @@ func (s *Server) Status(ctx context.Context) map[string]any {
 			direct["reachable"], direct["printer"] = true, info
 		}
 	case errors.Is(s.directErr(), link.ErrNotConfigured):
-		direct["setup"] = "run `prusactl setup` in a terminal"
+		direct["setup"] = hint.Printer()
 	case s.directErr() != nil:
 		direct["error"] = s.directErr().Error()
 	}
@@ -41,7 +43,7 @@ func (s *Server) Status(ctx context.Context) map[string]any {
 		}
 	}
 	if cloud["signed_in"] != true {
-		cloud["setup"] = "optional: run `prusactl login` in a terminal for remote access, camera, dialogs, queue and history"
+		cloud["setup"] = "optional, for remote access, camera, dialogs, queue and history: " + hint.Connect()
 	}
 	return map[string]any{"direct": direct, "connect": cloud}
 }

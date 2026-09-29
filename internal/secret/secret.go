@@ -23,6 +23,8 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/trevin-lee/prusactl/internal/appdir"
+
+	"github.com/trevin-lee/prusactl/internal/hint"
 )
 
 const service = "prusactl"
@@ -152,7 +154,7 @@ func readFile() (map[string]string, string, error) {
 		return nil, "", err
 	}
 	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, "", fmt.Errorf("%s is damaged (%v); delete it and run `prusactl setup` again", path, err)
+		return nil, "", fmt.Errorf("%s is damaged (%v); delete it and %s", path, err, hint.Printer())
 	}
 	return m, path, nil
 }

@@ -18,6 +18,8 @@ import (
 
 	"github.com/trevin-lee/prusactl/internal/compat"
 	"github.com/trevin-lee/prusactl/internal/redact"
+
+	"github.com/trevin-lee/prusactl/internal/hint"
 )
 
 // Client is a PrusaLink client.
@@ -74,7 +76,7 @@ func (e *APIError) Error() string {
 		msg += ": " + b
 	}
 	if e.Status == http.StatusUnauthorized {
-		msg += " (wrong password? run `prusactl setup` again)"
+		msg += " (" + hint.WrongSecret() + ")"
 	}
 	return msg
 }

@@ -18,6 +18,8 @@ import (
 	"github.com/trevin-lee/prusactl/internal/connect"
 	"github.com/trevin-lee/prusactl/internal/link"
 	"github.com/trevin-lee/prusactl/internal/redact"
+
+	"github.com/trevin-lee/prusactl/internal/hint"
 )
 
 const instructions = `Controls the user's Prusa 3D printer.
@@ -28,7 +30,19 @@ Start with connection_status or get_printer. Printer arguments accept a name, se
 
 Before anything physical (starting a print, moving axes, heating), check get_printer and, if there is a camera, get_camera_snapshot: the plate must be clear and nothing may be in the way. After a finished or stopped print, the tools that start a job or move toward the plate refuse until called with plate_clear=true; pass it only once you (or the user) have confirmed the plate is empty. Marking the printer ready is the same confirmation.
 
-Setup happens in a terminal, never through these tools: "prusactl setup" for the direct route (the password shown on the printer's screen), "prusactl login" for Prusa Connect. If a tool says one isn't set up, tell the user which command to run.`
+Setup never happens through these tools. `
+
+// instructionsFor ends the server's instructions with setup advice that fits
+// where prusactl is running (a terminal, or the MCP bundle's settings).
+func instructionsFor() string {
+	if hint.Managed() {
+		return instructions + "The user sets the printer's address and PrusaLink password in this extension's settings. " +
+			"Prusa Connect needs a separate installed copy of prusactl, so its features (camera, dialogs, queue, history) " +
+			"are unavailable here. If a tool says something isn't set up, tell the user which setting to fill in."
+	}
+	return instructions + `It happens in a terminal: "prusactl setup" for the direct route (the password shown on the printer's screen), ` +
+		`"prusactl login" for Prusa Connect. If a tool says one isn't set up, tell the user which command to run.`
+}
 
 // Server bundles the MCP server with both routes to the printer.
 type Server struct {
@@ -56,7 +70,7 @@ func New(session *auth.Session, cc *connect.Client, lc *link.Client, lcErr error
 	s := &Server{session: session, connect: cc, link: lc, linkErr: lcErr, openLink: link.Open}
 	s.mcp = mcp.NewServer(
 		&mcp.Implementation{Name: "prusactl", Title: "Prusa printer", Version: version},
-		&mcp.ServerOptions{Instructions: instructions},
+		&mcp.ServerOptions{Instructions: instructionsFor()},
 	)
 	s.addStatusTools()
 	s.addPrinterTools()
@@ -292,12 +306,12 @@ func (s *Server) route(ctx context.Context, ref printerRef) (target, error) {
 	}
 	if !s.session.SignedIn() {
 		if via == "connect" {
-			return target{}, errors.New("this needs Prusa Connect, which isn't signed in: ask the user to run `prusactl login` in a terminal")
+			return target{}, errors.New("this needs Prusa Connect, which isn't signed in: " + hint.Connect())
 		}
 		if errors.Is(directErr, link.ErrNotConfigured) || directErr == nil {
-			return target{}, errors.New("no way to reach a printer yet: run `prusactl setup` (direct, on your network) or `prusactl login` (Prusa Connect) in a terminal")
+			return target{}, fmt.Errorf("no way to reach a printer yet: %s (direct, on your network), or %s", hint.Printer(), hint.Connect())
 		}
-		return target{}, fmt.Errorf("%v; Prusa Connect isn't signed in either (run `prusactl login` to reach the printer from anywhere)", directErr)
+		return target{}, fmt.Errorf("%v; Prusa Connect isn't signed in either (%s, to reach the printer from anywhere)", directErr, hint.Connect())
 	}
 	p, err := s.resolvePrinter(ctx, ref.Printer)
 	if err != nil {
@@ -404,7 +418,7 @@ func (s *Server) connectPrinter(ctx context.Context, ref printerRef) (printerSum
 		return printerSummary{}, err
 	}
 	if !s.session.SignedIn() {
-		return printerSummary{}, errors.New("this needs Prusa Connect, which isn't signed in: ask the user to run `prusactl login` in a terminal")
+		return printerSummary{}, errors.New("this needs Prusa Connect, which isn't signed in: " + hint.Connect())
 	}
 	return s.resolvePrinter(ctx, ref.Printer)
 }

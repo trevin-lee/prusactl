@@ -5,36 +5,57 @@
   "version": "0.0.0",
   "description": "Run a Prusa 3D printer from an AI agent: status, camera, files, printing, and G-code.",
   "long_description": "Talks to the printer directly on your network through PrusaLink, and optionally through Prusa Connect (run `prusactl login` in a terminal) for the camera, on-screen dialogs, the print queue, and history. Unofficial; not affiliated with Prusa Research.",
-  "author": { "name": "Trevin Lee", "url": "https://github.com/trevin-lee" },
-  "repository": { "type": "git", "url": "https://github.com/trevin-lee/prusactl" },
+  "author": {
+    "name": "Trevin Lee",
+    "url": "https://github.com/trevin-lee"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/trevin-lee/prusactl"
+  },
   "homepage": "https://github.com/trevin-lee/prusactl",
   "license": "MIT",
-  "keywords": ["prusa", "3d-printing", "prusalink", "prusa-connect", "core-one"],
+  "keywords": [
+    "prusa",
+    "3d-printing",
+    "prusalink",
+    "prusa-connect",
+    "core-one"
+  ],
   "server": {
     "type": "binary",
     "entry_point": "server/prusactl-darwin",
     "mcp_config": {
       "command": "${__dirname}/server/prusactl-darwin",
-      "args": ["mcp"],
+      "args": [
+        "mcp"
+      ],
       "env": {
         "PRUSACTL_HOST": "${user_config.printer_address}",
-        "PRUSACTL_PASSWORD": "${user_config.printer_password}"
+        "PRUSACTL_PASSWORD": "${user_config.printer_password}",
+        "PRUSACTL_MANAGED": "mcpb"
       },
       "platform_overrides": {
         "win32": {
           "command": "${__dirname}/server/prusactl.exe",
-          "args": ["mcp"],
+          "args": [
+            "mcp"
+          ],
           "env": {
             "PRUSACTL_HOST": "${user_config.printer_address}",
-            "PRUSACTL_PASSWORD": "${user_config.printer_password}"
+            "PRUSACTL_PASSWORD": "${user_config.printer_password}",
+            "PRUSACTL_MANAGED": "mcpb"
           }
         },
         "linux": {
           "command": "${__dirname}/server/prusactl-linux",
-          "args": ["mcp"],
+          "args": [
+            "mcp"
+          ],
           "env": {
             "PRUSACTL_HOST": "${user_config.printer_address}",
-            "PRUSACTL_PASSWORD": "${user_config.printer_password}"
+            "PRUSACTL_PASSWORD": "${user_config.printer_password}",
+            "PRUSACTL_MANAGED": "mcpb"
           }
         }
       }
@@ -55,5 +76,11 @@
       "required": false
     }
   },
-  "compatibility": { "platforms": ["darwin", "win32", "linux"] }
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ]
+  }
 }
