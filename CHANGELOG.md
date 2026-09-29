@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- Homebrew installs from source, so `brew` no longer prints a deprecation
+  warning on every command. Coming from 0.1.3 or earlier, switch once with
+  `brew uninstall --cask prusactl && brew update && brew install trevin-lee/tap/prusactl`.
+- Running `setup` again removes the password it replaces, so a changed printer
+  address no longer leaves credentials behind, and `--forget` clears everything.
+- `via` is honoured everywhere: a tool that only works one way now refuses the
+  other route instead of ignoring it, and a bad value is always an error.
+- `list_printer_files` pages the same way over Prusa Connect as directly.
+- `prusactl status` shows the printer's state through Connect when the direct
+  route isn't set up.
+- `prusactl api` parses flags like every other command (`--foo` was sent to the
+  printer as the HTTP method), and checks the HTTP method.
+- The MCP bundle's messages point at its own settings instead of terminal
+  commands that don't apply there.
+- `prusactl logout` no longer claims to remove a session that wasn't saved, and
+  the version prints the same way however prusactl was built.
+- The README and help describe what the CLI actually does, mark the examples
+  that need Prusa Connect, and cover uninstalling and the one-printer limit.
+
 ## 0.1.3 (2026-09-28)
 
 - When Prusa changes an API, prusactl says so plainly instead of misbehaving:
