@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -80,6 +81,104 @@ type connectFilesInput struct {
 	TeamID   int64 `json:"team_id,omitempty" jsonschema:"team whose storage to list; default is the team of the first printer"`
 }
 
+// withStorages gives a storage listing one name for the list, whichever route
+// answered: the printer calls it storage_list, Prusa Connect calls it storages.
+// The route's own reply is kept.
+func withStorages(raw json.RawMessage) json.RawMessage {
+	var body map[string]json.RawMessage
+	if json.Unmarshal(raw, &body) != nil {
+		return raw
+	}
+	if _, ok := body["storages"]; ok {
+		return raw
+	}
+	list, ok := body["storage_list"]
+	if !ok {
+		return raw
+	}
+	body["storages"] = list
+	out, err := json.Marshal(body)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// transferBrief is a transfer in progress, said the same way whichever route
+// reported it. Connect's own record carries the whole sliced file's metadata,
+// down to the outline of every object on the plate, which is not what "is
+// anything being sent to the printer?" is asking.
+type transferBrief struct {
+	Name        string   `json:"name,omitempty"`
+	Path        string   `json:"path,omitempty"`
+	State       string   `json:"state,omitempty"`
+	Type        string   `json:"type,omitempty"`
+	Size        *float64 `json:"size,omitempty"`
+	Transferred *float64 `json:"transferred,omitempty"`
+	Progress    *float64 `json:"progress,omitempty"`
+	Started     *float64 `json:"start,omitempty"`
+}
+
+func compactTransfer(raw json.RawMessage) any {
+	m := decode(raw)
+	if len(m) == 0 {
+		return nil
+	}
+	b := &transferBrief{
+		State:       str(m, "state"),
+		Type:        str(m, "type"),
+		Size:        num(m, "size"),
+		Transferred: num(m, "transferred"),
+		Progress:    num(m, "progress"),
+		Started:     num(m, "start"),
+	}
+	for _, path := range [][]string{{"display_name"}, {"name"}, {"source_file", "display_name"}, {"source_file", "name"}} {
+		if b.Name = str(m, path...); b.Name != "" {
+			break
+		}
+	}
+	if b.Path = str(m, "path"); b.Path == "" {
+		b.Path = str(m, "destination")
+	}
+	if b.Name == "" && b.Path == "" && b.State == "" {
+		return nil
+	}
+	// Connect reports how big it is but not how far along; the printer reports
+	// both. Work out the one that's missing where it can be.
+	if b.Progress == nil && b.Size != nil && b.Transferred != nil && *b.Size > 0 {
+		pct := *b.Transferred / *b.Size * 100
+		b.Progress = &pct
+	}
+	return b
+}
+
+// currentTransfer picks the transfer still running out of what Connect returns,
+// so "is anything being sent to the printer?" has the same answer on both
+// routes. Connect's list is the printer's transfer history, newest first, and
+// every finished one carries an end; the printer itself only reports a
+// transfer while it is happening.
+func currentTransfer(raw json.RawMessage) json.RawMessage {
+	var outer struct {
+		Transfers []json.RawMessage `json:"transfers"`
+	}
+	if json.Unmarshal(raw, &outer) != nil || len(outer.Transfers) == 0 {
+		return json.RawMessage("null")
+	}
+	for _, t := range outer.Transfers {
+		var one struct {
+			End   *float64 `json:"end"`
+			State string   `json:"state"`
+		}
+		if json.Unmarshal(t, &one) != nil {
+			continue
+		}
+		if one.End == nil && !strings.HasPrefix(one.State, "FIN") {
+			return t
+		}
+	}
+	return json.RawMessage("null")
+}
+
 // busyFileAdvice explains PrusaLink's 409 on a file it still holds open. The
 // printer says only "File is busy", which is true of a file just uploaded or
 // selected on its screen, and says nothing about what to do next.
@@ -104,7 +203,9 @@ func (s *Server) addFileTools() {
 		var out json.RawMessage
 		switch {
 		case t.direct && dir == "":
-			_, err = s.direct().Get(ctx, "/api/v1/storage", &out)
+			if _, err = s.direct().Get(ctx, "/api/v1/storage", &out); err == nil {
+				out = withStorages(out)
+			}
 		case t.direct:
 			var path string
 			if path, err = link.FilePath(dir); err == nil {
@@ -114,7 +215,9 @@ func (s *Server) addFileTools() {
 				out = compactFolder(dir, out, in.Limit, in.Offset)
 			}
 		case dir == "":
-			err = s.connect.Get(ctx, printerPath(t.connect.UUID, "storages"), nil, &out)
+			if err = s.connect.Get(ctx, printerPath(t.connect.UUID, "storages"), nil, &out); err == nil {
+				out = withStorages(out)
+			}
 		default:
 			q := pageQuery(in.Limit, in.Offset, 50)
 			q.Set("path", dir)
@@ -216,7 +319,13 @@ func (s *Server) addFileTools() {
 		if err != nil {
 			return nil, nil, err
 		}
-		out := withVia(t, map[string]any{"upload": res.Upload, "file": res.File})
+		out := withVia(t, map[string]any{
+			"uploaded": res.Path,
+			"hash":     res.Hash, // what delete_connect_files and add_to_queue take
+			"printing": false,
+			"upload":   res.Upload,
+			"file":     res.File,
+		})
 		if then != "none" {
 			body := map[string]any{"hash": res.Hash, "team_id": p.TeamID, "position": -1}
 			if then == "print" {
@@ -299,7 +408,9 @@ func (s *Server) addFileTools() {
 		if err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(withVia(t, map[string]any{"started": in.Path, "result": res}))
+		out := startReport(stateOfPrinter(ctx, s, t.connect.UUID))
+		out["started"], out["result"] = in.Path, res
+		return jsonResult(withVia(t, out))
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
@@ -394,7 +505,7 @@ func (s *Server) addFileTools() {
 			if !found {
 				tr = json.RawMessage("null")
 			}
-			return jsonResult(withVia(t, map[string]any{"transfer": tr}))
+			return jsonResult(withVia(t, map[string]any{"transfer": compactTransfer(tr)}))
 		}
 		var transfers, queue json.RawMessage
 		if err := s.connect.Get(ctx, printerPath(t.connect.UUID, "transfers"), nil, &transfers); err != nil {
@@ -403,7 +514,10 @@ func (s *Server) addFileTools() {
 		if err := s.connect.Get(ctx, printerPath(t.connect.UUID, "download-queue"), nil, &queue); err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(withVia(t, map[string]any{"transfers": transfers, "download_queue": queue}))
+		return jsonResult(withVia(t, map[string]any{
+			"transfer":       compactTransfer(currentTransfer(transfers)),
+			"download_queue": queue,
+		}))
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
@@ -457,6 +571,7 @@ func (s *Server) addFileTools() {
 
 type uploadResult struct {
 	Hash   string
+	Path   string // where it landed on the printer, as the direct route reports it
 	Upload json.RawMessage
 	File   json.RawMessage
 }
@@ -716,7 +831,7 @@ func (s *Server) uploadViaConnect(ctx context.Context, p printerSummary, localPa
 	if !json.Valid(fileJSON) {
 		fileJSON = nil
 	}
-	return &uploadResult{Hash: hash, Upload: created, File: fileJSON}, nil
+	return &uploadResult{Hash: hash, Path: path.Join(destination, filename), Upload: created, File: fileJSON}, nil
 }
 
 // defaultStorage returns the path of the printer's first storage.

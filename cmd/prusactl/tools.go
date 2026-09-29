@@ -100,12 +100,49 @@ func runTool(ctx context.Context, name string, args map[string]any, jsonOut bool
 	defer tc.close()
 	raw, err := tc.call(ctx, name, args)
 	if err != nil {
-		return err
+		return asFlags(err)
 	}
 	if jsonOut || render == nil {
 		return printJSON(raw)
 	}
 	return render(raw)
+}
+
+// asFlags spells a tool's arguments the way the terminal takes them. The tools
+// are written for an agent calling them by name; the same sentence reaching a
+// person should tell them which flag to add, not which JSON field.
+var argSpellings = strings.NewReplacer(
+	"set overwrite to replace it", "add --overwrite to replace it",
+	"pass overwrite=true to replace it", "add --overwrite to replace it",
+	"via=connect isn't possible here; leave via out", "--via connect isn't possible here; leave --via out",
+	"via=direct isn't possible here; leave via out", "--via direct isn't possible here; leave --via out",
+	"pass exactly one of path or hash", "pass a path, or a hash with --hash",
+	"call again with plate_clear=true", "run it again with --plate-clear",
+	"plate_clear: true", "--plate-clear",
+	"pass printer as one of", "pass --printer as one of",
+	"pass team_id", "pass --printer for the team",
+	`delete it through Prusa Connect with via="connect"`, "delete it through Prusa Connect with --via connect",
+)
+
+func asFlags(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if out := argSpellings.Replace(msg); out != msg {
+		return errors.New(out)
+	}
+	return err
+}
+
+// mustJSON renders a result the CLI assembled itself, for the commands whose
+// answer isn't a tool's JSON (a saved picture, say) but which still take --json.
+func mustJSON(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return b
 }
 
 func printJSON(raw json.RawMessage) error {
@@ -144,18 +181,49 @@ var printerFlags = []flagSpec{
 	{Name: "json", Usage: "print the raw JSON result"},
 }
 
-func pageArgs(o options, args map[string]any) map[string]any {
-	if n := o.str("limit"); n != "" {
-		if v, err := strconv.Atoi(n); err == nil {
-			args["limit"] = v
+func pageArgs(o options, args map[string]any) (map[string]any, error) {
+	for _, name := range []string{"limit", "offset"} {
+		v, ok, err := intFlag(o, name)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			args[name] = v
 		}
 	}
-	if n := o.str("offset"); n != "" {
-		if v, err := strconv.Atoi(n); err == nil {
-			args["offset"] = v
-		}
+	return args, nil
+}
+
+// intFlag reads a flag that takes a number. A value that isn't one is refused:
+// silently falling back to the default would answer a different question than
+// the one asked, and look like it worked.
+func intFlag(o options, name string) (int, bool, error) {
+	raw := o.str(name)
+	if raw == "" {
+		return 0, false, nil
 	}
-	return args
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false, fmt.Errorf("--%s takes a number (got %q)", name, raw)
+	}
+	return v, true, nil
+}
+
+// noArgs refuses the arguments a command doesn't take. Accepting and ignoring
+// them hides a typo: `prusactl telemetry 60` looks like it asked for an hour.
+func noArgs(name string, pos []string) error {
+	if len(pos) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s: takes no arguments, got %q (see `prusactl help %s`)", name, pos[0], name)
+}
+
+// atMost refuses more arguments than a command reads.
+func atMost(name string, pos []string, n int, usage string) error {
+	if len(pos) <= n {
+		return nil
+	}
+	return fmt.Errorf("%s: unexpected argument %q; usage: %s", name, pos[n], usage)
 }
 
 var pageFlags = []flagSpec{

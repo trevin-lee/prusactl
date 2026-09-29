@@ -10,14 +10,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/trevin-lee/prusactl/internal/link"
 )
 
 // Every command here is a thin wrapper over the MCP tool of the same purpose,
 // so the CLI and an agent can do exactly the same things.
 
-func action(pos []string, allowed ...string) (string, []string, error) {
+func action(name string, pos []string, allowed ...string) (string, []string, error) {
 	if len(pos) == 0 {
 		return allowed[0], nil, nil
 	}
@@ -27,12 +25,15 @@ func action(pos []string, allowed ...string) (string, []string, error) {
 			return a, pos[1:], nil
 		}
 	}
-	return "", nil, fmt.Errorf("unknown action %q; use one of: %s", pos[0], strings.Join(allowed, ", "))
+	return "", nil, fmt.Errorf("%s: unknown action %q; use one of: %s", name, pos[0], strings.Join(allowed, ", "))
 }
 
 // --- printers and status ---------------------------------------------------------
 
-func printersCmd(ctx context.Context, o options, _ []string) error {
+func printersCmd(ctx context.Context, o options, pos []string) error {
+	if err := noArgs("printers", pos); err != nil {
+		return err
+	}
 	return runTool(ctx, "list_printers", map[string]any{}, o.on("json"), func(raw json.RawMessage) error {
 		m := decodeMap(raw)
 		// One printer can appear on both routes, under the name each route
@@ -70,12 +71,15 @@ func printersCmd(ctx context.Context, o options, _ []string) error {
 	})
 }
 
-func telemetryCmd(ctx context.Context, o options, _ []string) error {
+func telemetryCmd(ctx context.Context, o options, pos []string) error {
+	if err := noArgs("telemetry", pos); err != nil {
+		return err
+	}
 	args := printerArgs(o)
-	if m := o.str("minutes"); m != "" {
-		if v, err := strconv.Atoi(m); err == nil {
-			args["minutes"] = v
-		}
+	if v, ok, err := intFlag(o, "minutes"); err != nil {
+		return err
+	} else if ok {
+		args["minutes"] = v
 	}
 	// Connect answers with a sample per field per time bucket, most of them
 	// empty. The table is what a person wants from that: where each reading
@@ -113,16 +117,31 @@ func telemetryCmd(ctx context.Context, o options, _ []string) error {
 	})
 }
 
-func eventsCmd(ctx context.Context, o options, _ []string) error {
-	return runTool(ctx, "list_events", pageArgs(o, printerArgs(o)), o.on("json"), func(raw json.RawMessage) error {
-		for _, e := range rows(decodeMap(raw), "events") {
+func eventsCmd(ctx context.Context, o options, pos []string) error {
+	if err := noArgs("events", pos); err != nil {
+		return err
+	}
+	args, err := pageArgs(o, printerArgs(o))
+	if err != nil {
+		return err
+	}
+	return runTool(ctx, "list_events", args, o.on("json"), func(raw json.RawMessage) error {
+		list := rows(decodeMap(raw), "events")
+		if len(list) == 0 {
+			fmt.Println("No events.")
+			return nil
+		}
+		for _, e := range list {
 			fmt.Printf("%-20s %-18s %s\n", stamp(field(e, "created")), field(e, "event"), field(e, "command"))
 		}
 		return nil
 	})
 }
 
-func transfersCmd(ctx context.Context, o options, _ []string) error {
+func transfersCmd(ctx context.Context, o options, pos []string) error {
+	if err := noArgs("transfers", pos); err != nil {
+		return err
+	}
 	return runTool(ctx, "get_transfers", printerArgs(o), o.on("json"), func(raw json.RawMessage) error {
 		m := decodeMap(raw)
 		t, _ := m["transfer"].(map[string]any)
@@ -130,18 +149,21 @@ func transfersCmd(ctx context.Context, o options, _ []string) error {
 			fmt.Println("Nothing is being transferred.")
 			return nil
 		}
-		name := field(t, "display_name")
+		name := field(t, "name")
 		if name == "" {
-			name = field(t, "name")
+			name = field(t, "path")
 		}
-		fmt.Printf("%s\n  %s", name, field(t, "type"))
+		fmt.Println(name)
+		parts := []string{field(t, "state")}
 		if p := field(t, "progress"); p != "" {
-			fmt.Printf(", %s%%", p)
+			if f, err := strconv.ParseFloat(p, 64); err == nil {
+				parts = append(parts, fmt.Sprintf("%.0f%%", f))
+			}
 		}
-		if s := field(t, "transferred"); s != "" {
-			fmt.Printf(", %s of %s bytes", s, field(t, "size"))
+		if sz := field(t, "size"); sz != "" {
+			parts = append(parts, sz+" bytes")
 		}
-		fmt.Println()
+		fmt.Printf("  %s\n", strings.Join(parts, ", "))
 		return nil
 	})
 }
@@ -149,14 +171,14 @@ func transfersCmd(ctx context.Context, o options, _ []string) error {
 // --- printing --------------------------------------------------------------------
 
 // plateClear settles the "is the plate empty?" question the tools require after
-// a finished or stopped print. An agent passes a flag; a person is asked.
-func plateClear(o options) (map[string]any, error) {
+// a finished or stopped print. An agent passes a flag; a person is asked, by
+// withPlateConfirm, once the tool says the question applies.
+func plateClear(o options) map[string]any {
 	args := printerArgs(o)
 	if o.on("plate-clear") {
 		args["plate_clear"] = true
-		return args, nil
 	}
-	return args, nil
+	return args
 }
 
 func withPlateConfirm(ctx context.Context, o options, name string, args map[string]any, render func(json.RawMessage) error) error {
@@ -176,7 +198,10 @@ func withPlateConfirm(ctx context.Context, o options, name string, args map[stri
 	return runTool(ctx, name, args, o.on("json"), render)
 }
 
-// started reports what a job-starting tool did, whichever route ran it.
+// started reports what a job-starting tool did, whichever route ran it. A file
+// that reached the printer without printing is the interesting case: the
+// printer may be waiting on a question, and saying "Printing" then would be a
+// lie the user only discovers at the machine.
 func started(raw json.RawMessage) error {
 	m := decodeMap(raw)
 	what := field(m, "started")
@@ -186,9 +211,16 @@ func started(raw json.RawMessage) error {
 	if what == "" {
 		return printJSON(raw)
 	}
-	fmt.Printf("Printing %s.\n", what)
-	if st := field(m, "state"); st != "" {
+	if field(m, "printing") == "true" {
+		fmt.Printf("Printing %s.\n", what)
+	} else {
+		fmt.Printf("Sent %s to the printer; it isn't printing yet.\n", what)
+	}
+	if st := field(m, "printer_state"); st != "" {
 		fmt.Printf("The printer is %s.\n", st)
+	}
+	if note := field(m, "note"); note != "" {
+		fmt.Println(note)
 	}
 	return nil
 }
@@ -201,10 +233,7 @@ func printCmd(ctx context.Context, o options, pos []string) error {
 	if err != nil {
 		return err
 	}
-	args, err := plateClear(o)
-	if err != nil {
-		return err
-	}
+	args := plateClear(o)
 	args["local_path"] = path
 	args["then"] = "print"
 	if d := o.str("destination"); d != "" {
@@ -220,21 +249,29 @@ func startCmd(ctx context.Context, o options, pos []string) error {
 	if len(pos) != 1 {
 		return errors.New("start: usage: prusactl start PATH (a file already on the printer, e.g. /usb/part.bgcode)")
 	}
-	args, err := plateClear(o)
-	if err != nil {
-		return err
-	}
+	args := plateClear(o)
 	args["path"] = pos[0]
 	return withPlateConfirm(ctx, o, "start_print", args, started)
 }
 
 func controlCmd(act string) func(context.Context, options, []string) error {
-	return func(ctx context.Context, o options, _ []string) error {
+	return func(ctx context.Context, o options, pos []string) error {
+		if err := noArgs(act, pos); err != nil {
+			return err
+		}
 		args := printerArgs(o)
 		args["action"] = act
 		return runTool(ctx, "control_print", args, o.on("json"), func(raw json.RawMessage) error {
 			m := decodeMap(raw)
-			fmt.Printf("%s: %s (job %s was %s)\n", field(m, "printer"), act, field(m, "job_id"), field(m, "state_before"))
+			line := act
+			if before := field(m, "state_before"); before != "" {
+				line += fmt.Sprintf(" (it was %s)", before)
+			}
+			who := field(m, "printer")
+			if who == "" {
+				who = "The printer"
+			}
+			fmt.Printf("%s: %s\n", who, line)
 			return nil
 		})
 	}
@@ -244,10 +281,7 @@ func gcodeCmd(ctx context.Context, o options, pos []string) error {
 	if len(pos) == 0 {
 		return errors.New(`gcode: usage: prusactl gcode "G28" ["M104 S215" ...]`)
 	}
-	args, err := plateClear(o)
-	if err != nil {
-		return err
-	}
+	args := plateClear(o)
 	args["gcode"] = strings.Join(pos, "\n")
 	return withPlateConfirm(ctx, o, "run_gcode", args, func(raw json.RawMessage) error {
 		m := decodeMap(raw)
@@ -259,23 +293,37 @@ func gcodeCmd(ctx context.Context, o options, pos []string) error {
 
 func dialogCmd(ctx context.Context, o options, pos []string) error {
 	if len(pos) != 1 {
-		return errors.New("dialog: usage: prusactl dialog BUTTON (the label get_printer shows in dialog_info)")
+		return errors.New(`dialog: usage: prusactl dialog BUTTON; "prusactl printers --json" lists the buttons under dialog_info`)
 	}
 	args := printerArgs(o)
 	args["button"] = pos[0]
-	return runTool(ctx, "respond_to_dialog", args, o.on("json"), nil)
+	return runTool(ctx, "respond_to_dialog", args, o.on("json"), func(raw json.RawMessage) error {
+		m := decodeMap(raw)
+		button := field(m, "button")
+		if button == "" {
+			button = pos[0]
+		}
+		fmt.Printf("Pressed %q on the printer's screen.\n", button)
+		return nil
+	})
 }
 
 // --- files on the printer ----------------------------------------------------------
 
 func filesCmd(ctx context.Context, o options, pos []string) error {
-	act, rest, err := action(pos, "ls", "get", "put", "rm")
+	act, rest, err := action("files", pos, "ls", "get", "put", "rm")
 	if err != nil {
 		return err
 	}
 	switch act {
 	case "ls":
-		args := pageArgs(o, printerArgs(o))
+		args, err := pageArgs(o, printerArgs(o))
+		if err != nil {
+			return err
+		}
+		if err := atMost("files ls", rest, 1, "prusactl files ls [PATH]"); err != nil {
+			return err
+		}
 		if len(rest) > 0 {
 			args["path"] = rest[0]
 		}
@@ -285,21 +333,32 @@ func filesCmd(ctx context.Context, o options, pos []string) error {
 			if files == nil {
 				return printJSON(raw)
 			}
-			if storages := rows(files, "storage_list"); len(storages) > 0 {
-				fmt.Printf("%-12s %-10s %s\n", "STORAGE", "TYPE", "PATH")
+			if storages := rows(files, "storages"); len(storages) > 0 {
+				fmt.Printf("%-12s %-22s %s\n", "STORAGE", "TYPE", "PATH")
 				for _, st := range storages {
 					kind := field(st, "type")
 					if field(st, "read_only") == "true" {
 						kind += " (read-only)"
 					}
-					if field(st, "available") != "true" {
+					// Only the printer says whether a storage is there; a
+					// missing field isn't a storage that's missing.
+					if field(st, "available") == "false" {
 						kind += " (not available)"
 					}
-					fmt.Printf("%-12s %-10s %s\n", field(st, "name"), kind, field(st, "path"))
+					where := field(st, "path")
+					if where == "" {
+						where = field(st, "mountpoint") // what Connect calls it
+					}
+					fmt.Printf("%-12s %-22s %s\n", field(st, "name"), kind, where)
 				}
 				return nil
 			}
-			for _, e := range rows(files, "entries") {
+			entries := rows(files, "entries")
+			if len(entries) == 0 {
+				fmt.Println("The folder is empty.")
+				return nil
+			}
+			for _, e := range entries {
 				size := field(e, "size")
 				if size == "" {
 					size = "-"
@@ -312,8 +371,27 @@ func filesCmd(ctx context.Context, o options, pos []string) error {
 			return nil
 		})
 	case "get":
-		lc, lcErr := link.Open()
-		return download(ctx, lc, lcErr, rest)
+		if len(rest) == 0 || len(rest) > 2 {
+			return errors.New("files get: usage: prusactl files get PATH [DEST]")
+		}
+		dest := "."
+		if len(rest) == 2 {
+			dest = rest[1]
+		}
+		local, err := filepath.Abs(dest) // the tool takes an absolute path
+		if err != nil {
+			return err
+		}
+		args := printerArgs(o)
+		args["path"], args["local_path"] = rest[0], local
+		if o.on("overwrite") {
+			args["overwrite"] = true
+		}
+		return runTool(ctx, "download_printer_file", args, o.on("json"), func(raw json.RawMessage) error {
+			m := decodeMap(raw)
+			fmt.Printf("Saved %s (%s bytes).\n", field(m, "saved"), field(m, "bytes"))
+			return nil
+		})
 	case "put":
 		if len(rest) != 1 {
 			return errors.New("files put: usage: prusactl files put FILE")
@@ -354,7 +432,7 @@ func filesCmd(ctx context.Context, o options, pos []string) error {
 // --- files in Prusa Connect ---------------------------------------------------------
 
 func cloudCmd(ctx context.Context, o options, pos []string) error {
-	act, rest, err := action(pos, "ls", "rm")
+	act, rest, err := action("cloud", pos, "ls", "rm")
 	if err != nil {
 		return err
 	}
@@ -362,16 +440,52 @@ func cloudCmd(ctx context.Context, o options, pos []string) error {
 		if len(rest) == 0 {
 			return errors.New("cloud rm: usage: prusactl cloud rm HASH [HASH...]")
 		}
-		return runTool(ctx, "delete_connect_files", map[string]any{"hashes": rest}, o.on("json"), func(raw json.RawMessage) error {
+		args := map[string]any{"hashes": rest}
+		if p := o.str("printer"); p != "" {
+			args["printer"] = p
+		}
+		if t := o.str("team"); t != "" {
+			if v, err := strconv.ParseInt(t, 10, 64); err == nil {
+				args["team_id"] = v
+			} else {
+				return fmt.Errorf("cloud: --team takes a number (got %q)", t)
+			}
+		}
+		return runTool(ctx, "delete_connect_files", args, o.on("json"), func(raw json.RawMessage) error {
 			// Connect answers 204 whether or not the hash was there, so this
 			// says what was asked, not what existed.
 			fmt.Printf("Asked Prusa Connect to delete %d file(s) from its storage.\n", len(rest))
 			return nil
 		})
 	}
-	return runTool(ctx, "list_connect_files", pageArgs(o, map[string]any{}), o.on("json"), func(raw json.RawMessage) error {
-		for _, f := range rows(decodeMap(raw), "files") {
-			fmt.Printf("%-44s %10s  %s\n", field(f, "hash"), field(f, "size"), field(f, "display_name"))
+	args := map[string]any{}
+	if p := o.str("printer"); p != "" {
+		args["printer"] = p
+	}
+	if t := o.str("team"); t != "" {
+		if v, err := strconv.ParseInt(t, 10, 64); err == nil {
+			args["team_id"] = v
+		} else {
+			return fmt.Errorf("cloud: --team takes a number (got %q)", t)
+		}
+	}
+	paged, err := pageArgs(o, args)
+	if err != nil {
+		return err
+	}
+	return runTool(ctx, "list_connect_files", paged, o.on("json"), func(raw json.RawMessage) error {
+		list := rows(decodeMap(raw), "files")
+		if len(list) == 0 {
+			fmt.Println("Prusa Connect's storage is empty.")
+			return nil
+		}
+		fmt.Printf("%-44s %10s  %s\n", "HASH", "SIZE", "NAME")
+		for _, f := range list {
+			name := field(f, "display_name")
+			if name == "" {
+				name = field(f, "name")
+			}
+			fmt.Printf("%-44s %10s  %s\n", field(f, "hash"), field(f, "size"), name)
 		}
 		return nil
 	})
@@ -380,13 +494,17 @@ func cloudCmd(ctx context.Context, o options, pos []string) error {
 // --- the print queue -----------------------------------------------------------------
 
 func queueCmd(ctx context.Context, o options, pos []string) error {
-	act, rest, err := action(pos, "ls", "add", "rm")
+	act, rest, err := action("queue", pos, "ls", "add", "rm")
 	if err != nil {
 		return err
 	}
 	switch act {
 	case "ls":
-		return runTool(ctx, "get_queue", pageArgs(o, printerArgs(o)), o.on("json"), func(raw json.RawMessage) error {
+		args, err := pageArgs(o, printerArgs(o))
+		if err != nil {
+			return err
+		}
+		return runTool(ctx, "get_queue", args, o.on("json"), func(raw json.RawMessage) error {
 			m := decodeMap(raw)
 			q, _ := m["queue"].(map[string]any)
 			if q == nil {
@@ -398,13 +516,15 @@ func queueCmd(ctx context.Context, o options, pos []string) error {
 			}
 			if len(jobs) == 0 {
 				fmt.Println("The queue is empty.")
+				return nil
 			}
+			fmt.Printf("%-10s %-12s %s\n", "QUEUE ID", "STATE", "FILE")
 			for _, j := range jobs {
 				name := field(j, "file", "display_name")
 				if name == "" {
 					name = field(j, "path")
 				}
-				fmt.Printf("%-10s %s\n", field(j, "id"), name)
+				fmt.Printf("%-10s %-12s %s\n", field(j, "id"), field(j, "state"), name)
 			}
 			return nil
 		})
@@ -418,10 +538,10 @@ func queueCmd(ctx context.Context, o options, pos []string) error {
 		} else {
 			args["path"] = rest[0]
 		}
-		if p := o.str("position"); p != "" {
-			if v, err := strconv.Atoi(p); err == nil {
-				args["position"] = v
-			}
+		if v, ok, err := intFlag(o, "position"); err != nil {
+			return err
+		} else if ok {
+			args["position"] = v
 		}
 		return runTool(ctx, "add_to_queue", args, o.on("json"), func(raw json.RawMessage) error {
 			m := decodeMap(raw)
@@ -430,7 +550,11 @@ func queueCmd(ctx context.Context, o options, pos []string) error {
 			if name == "" {
 				name = field(q, "file", "name")
 			}
-			fmt.Printf("Queued %s as job %s (%s).\n", name, field(q, "id"), field(q, "state"))
+			// "job" means three different things here: a queue entry, an entry
+			// in the print history, and the job the printer is running. Each
+			// id only works where it came from, so say which one this is.
+			fmt.Printf("Queued %s (%s). Queue id %s: `prusactl queue rm %s` takes it back out.\n",
+				name, field(q, "state"), field(q, "id"), field(q, "id"))
 			return nil
 		})
 	default: // rm
@@ -444,7 +568,7 @@ func queueCmd(ctx context.Context, o options, pos []string) error {
 		args := printerArgs(o)
 		args["job_id"] = id
 		return runTool(ctx, "remove_from_queue", args, o.on("json"), func(raw json.RawMessage) error {
-			fmt.Printf("Removed job %d from the queue.\n", id)
+			fmt.Printf("Removed queue id %d from the queue.\n", id)
 			return nil
 		})
 	}
@@ -453,6 +577,9 @@ func queueCmd(ctx context.Context, o options, pos []string) error {
 // --- job history ----------------------------------------------------------------------
 
 func jobsCmd(ctx context.Context, o options, pos []string) error {
+	if err := atMost("jobs", pos, 1, "prusactl jobs [JOB-ID]"); err != nil {
+		return err
+	}
 	if len(pos) == 1 {
 		id, err := strconv.ParseInt(pos[0], 10, 64)
 		if err != nil {
@@ -480,7 +607,10 @@ func jobsCmd(ctx context.Context, o options, pos []string) error {
 			return nil
 		})
 	}
-	args := pageArgs(o, printerArgs(o))
+	args, err := pageArgs(o, printerArgs(o))
+	if err != nil {
+		return err
+	}
 	if st := o.str("state"); st != "" {
 		args["states"] = strings.Split(st, ",")
 	}
@@ -511,7 +641,7 @@ func jobsCmd(ctx context.Context, o options, pos []string) error {
 // --- firmware commands -------------------------------------------------------------------
 
 func cmdCmd(ctx context.Context, o options, pos []string) error {
-	act, rest, err := action(pos, "ls", "send", "status")
+	act, rest, err := action("cmd", pos, "ls", "send", "status")
 	if err != nil {
 		return err
 	}
@@ -562,19 +692,29 @@ func cmdCmd(ctx context.Context, o options, pos []string) error {
 		if len(rest) == 0 {
 			return errors.New(`cmd send: usage: prusactl cmd send NAME [key=value ...], e.g. cmd send SET_NOZZLE_TEMPERATURE nozzle_temperature=215; "prusactl cmd ls" names the arguments each command takes`)
 		}
-		args, err := plateClear(o)
-		if err != nil {
-			return err
-		}
+		args := plateClear(o)
 		args["command"] = rest[0]
 		if kw := parseKwargs(rest[1:]); len(kw) > 0 {
 			args["kwargs"] = kw
 		}
+		if o.on("async") {
+			args["async"] = true
+		}
+		if t := o.str("timeout"); t != "" {
+			v, err := strconv.Atoi(t)
+			if err != nil {
+				return fmt.Errorf("cmd send: --timeout takes seconds (got %q)", t)
+			}
+			args["timeout_seconds"] = v
+		}
 		return withPlateConfirm(ctx, o, "send_command", args, func(raw json.RawMessage) error {
 			m := decodeMap(raw)
-			c, _ := m["response"].(map[string]any)
-			fmt.Printf("%s is %s", field(m, "command"), field(c, "command", "state"))
-			if id := field(c, "command", "id"); id != "" {
+			state := field(m, "state")
+			if state == "" {
+				state = "sent"
+			}
+			fmt.Printf("%s is %s", field(m, "command"), state)
+			if id := field(m, "command_id"); id != "" {
 				fmt.Printf(" (command %s; `prusactl cmd status %s` follows it)", id, id)
 			}
 			fmt.Println()
@@ -610,6 +750,9 @@ func parseKwargs(pairs []string) map[string]any {
 // --- camera -------------------------------------------------------------------------------
 
 func cameraCmd(ctx context.Context, o options, pos []string) error {
+	if err := atMost("camera", pos, 1, "prusactl camera [FILE]"); err != nil {
+		return err
+	}
 	tc, err := openTools(ctx)
 	if err != nil {
 		return err
@@ -640,6 +783,9 @@ func cameraCmd(ctx context.Context, o options, pos []string) error {
 	}
 	if err := os.WriteFile(dest, img, 0o644); err != nil {
 		return err
+	}
+	if o.on("json") {
+		return printJSON(mustJSON(map[string]any{"saved": dest, "bytes": len(img), "mime_type": mime, "camera": note}))
 	}
 	fmt.Printf("Saved %s (%d bytes). %s\n", dest, len(img), note)
 	return nil

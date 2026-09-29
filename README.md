@@ -213,6 +213,7 @@ The printer's PrusaLink password is kept in the same keychain.
 | `list_jobs`, `get_job` | Connect | Print history, and the objects in a job that can be cancelled |
 | `get_telemetry`, `list_events` | Connect | Telemetry history and the event log |
 | `list_connect_files` | Connect | Connect cloud storage |
+| `delete_connect_files` | Connect | Delete from Connect cloud storage, freeing the team's quota |
 | `api_request` | both | Any other endpoint: `/api/...` goes to the printer, `/app/...` to Connect |
 
 Every `printer` argument accepts a name, serial number, or Connect UUID. With one
@@ -227,7 +228,7 @@ prusactl logout                    forget the Prusa Connect session
 prusactl status                    printer state and how it is reachable
 prusactl mcp                       run the MCP server on stdio
 
-prusactl printers                  the printers on the Prusa Connect account
+prusactl printers                  the printers prusactl can reach
 prusactl print FILE                upload a sliced file and start printing it
 prusactl start PATH                start a file already on the printer
 prusactl pause | resume | stop     control the running print
@@ -252,8 +253,9 @@ prusactl version                   print the version (--version does the same)
 The printer commands run the very tools the MCP server exposes, over an
 in-memory connection, so the CLI and an agent reach the printer by the same code
 path with the same safety checks, and neither can do something the other can't.
-Every one of them takes `--printer NAME` to pick a printer, `--via direct` or
-`--via connect` to force a route, and `--json` for the tool's own result.
+Most of them take `--printer NAME` to pick a printer and `--via direct` or
+`--via connect` to force a route; `prusactl help <command>` lists what each one
+accepts. Every one takes `--json`.
 
 The same plate check applies: after a finished or stopped print, anything that
 starts a job asks whether the plate is clear. `--plate-clear` answers yes, for

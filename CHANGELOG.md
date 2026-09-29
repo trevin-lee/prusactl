@@ -28,6 +28,27 @@
 - The tests run on Windows in CI. Four of them used to write into the real
   prusactl directory there, overwriting the config and credentials of whoever
   ran them; nothing had run them on Windows in 36 commits.
+- Tools that answered in one shape directly and another through Prusa Connect
+  now answer the same way either way, so a caller reads them once.
+  `get_transfers` reported nothing at all over Connect, where it matters most,
+  because Connect's list is the transfer history and every entry in it has
+  finished; it also carried the whole sliced file's metadata, down to the
+  outline of every object on the plate. `upload_file` over Connect now says
+  where the file landed and gives back the hash `cloud rm` and `queue add
+  --hash` take. `control_print` and `start_print` report what they acted on and
+  how it went over Connect too, so `prusactl print` no longer says "Printing"
+  when the printer stopped on a question.
+- `prusactl files get` honours the flags it advertises. It re-parsed its
+  arguments against the old `download` command, so `--overwrite` was dropped
+  and `--printer` and `--via` were ignored.
+- `prusactl cloud` can say whose storage it means, with `--printer` or `--team`.
+  With more than one printer it used to ask for an argument the CLI didn't have.
+- `prusactl cmd send --async` returns the command id that `cmd status` follows;
+  there was no way to get one before.
+- Commands refuse arguments they don't read and values that aren't numbers.
+  `prusactl telemetry 60` ignored the 60, and `--limit 5O` quietly returned the
+  first page.
+- Errors reaching the terminal name flags, not the tools' JSON arguments.
 
 ## 0.1.6 (2026-09-28)
 

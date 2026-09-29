@@ -118,9 +118,11 @@ and passwords in the response are shown as [redacted] unless you pass --raw.`,
 	},
 	{
 		Name:    "printers",
-		Summary: "List the printers on the Prusa Connect account",
-		Help:    `Needs Prusa Connect. The direct route reaches one printer, the one setup saved.`,
-		Flags:   []flagSpec{{Name: "json", Usage: "print the raw JSON result"}},
+		Summary: "List the printers prusactl can reach",
+		Help: `The printer ` + "`prusactl setup`" + ` saved is listed whether or not Prusa Connect is
+signed in; Prusa Connect adds the rest of the account's. One printer set up
+both ways appears twice, under the name each route knows it by.`,
+		Flags: []flagSpec{{Name: "json", Usage: "print the raw JSON result"}},
 	},
 	{
 		Name:    "print",
@@ -131,7 +133,7 @@ after a finished or stopped print you are asked whether the plate is clear
 (--plate-clear answers yes, for scripts).`,
 		Flags: flags(printerFlags, []flagSpec{
 			{Name: "plate-clear", Usage: "confirm the plate is empty without being asked"},
-			{Name: "destination", Value: "DIR", Usage: "folder on the printer (default /usb/)"},
+			{Name: "destination", Value: "DIR", Usage: "folder on the printer (default: its first writable storage)"},
 			{Name: "overwrite", Usage: "replace a file of the same name on the printer"},
 		}),
 		Pos: []posArg{{Label: "file", Kind: "files"}},
@@ -174,9 +176,10 @@ which each run overwrites. Direct connection only.`,
 		Name:    "dialog",
 		Args:    "BUTTON",
 		Summary: "Press a button on the printer's screen",
-		Help:    `BUTTON is a label ` + "`prusactl status --json`" + ` shows in dialog_info. Needs Prusa Connect.`,
-		Flags:   printerFlags,
-		Pos:     []posArg{{Label: "button"}},
+		Help: `BUTTON is a label ` + "`prusactl printers --json`" + ` shows under dialog_info, which
+Prusa Connect reports for a printer waiting on a question. Needs Prusa Connect.`,
+		Flags: printerFlags,
+		Pos:   []posArg{{Label: "button"}},
 	},
 	{
 		Name:    "files",
@@ -184,7 +187,7 @@ which each run overwrites. Direct connection only.`,
 		Summary: "Browse and manage files on the printer",
 		Help:    `Without an action, lists the printer's storages.`,
 		Flags: flags(printerFlags, pageFlags, []flagSpec{
-			{Name: "destination", Value: "DIR", Usage: "folder on the printer for put (default /usb/)"},
+			{Name: "destination", Value: "DIR", Usage: "folder on the printer for put (default: its first writable storage)"},
 			{Name: "overwrite", Usage: "replace an existing file"},
 		}),
 		Pos: []posArg{{Label: "action", Kind: "ls get put rm"}},
@@ -193,9 +196,16 @@ which each run overwrites. Direct connection only.`,
 		Name:    "cloud",
 		Args:    "ls | rm HASH...",
 		Summary: "Files in Prusa Connect's cloud storage",
-		Help:    `Uploading through Prusa Connect leaves a copy here, against the team's quota.`,
-		Flags:   flags(pageFlags, []flagSpec{{Name: "json", Usage: "print the raw JSON result"}}),
-		Pos:     []posArg{{Label: "action", Kind: "ls rm"}},
+		Help: `Uploading through Prusa Connect leaves a copy here, against the team's quota.
+
+The storage belongs to a team, not a printer. With one printer its team is
+used; with several, name one with --printer, or give --team directly.`,
+		Flags: flags(pageFlags, []flagSpec{
+			{Name: "printer", Value: "NAME", Usage: "whose team's storage to use (with several printers)"},
+			{Name: "team", Value: "ID", Usage: "the team's id, instead of naming a printer"},
+			{Name: "json", Usage: "print the raw JSON result"},
+		}),
+		Pos: []posArg{{Label: "action", Kind: "ls rm"}},
 	},
 	{
 		Name:    "queue",
@@ -249,10 +259,16 @@ Needs Prusa Connect and a camera.`,
 		Name:    "cmd",
 		Args:    "ls | send NAME [key=value ...] | status COMMAND-ID",
 		Summary: "Run a firmware command through Prusa Connect",
-		Help: `` + "`cmd ls`" + ` lists what this printer accepts. Physical commands act on real
-hardware: check the printer and its camera first.`,
+		Help: `` + "`cmd ls`" + ` lists what this printer accepts, and names the arguments each one
+takes. Physical commands act on real hardware: check the printer and its
+camera first.
+
+` + "`cmd send`" + ` waits for the printer and reports what happened. With --async it
+returns a command id instead, which ` + "`cmd status`" + ` follows.`,
 		Flags: flags(printerFlags, []flagSpec{
 			{Name: "now", Usage: "for ls, only commands the printer accepts right now"},
+			{Name: "async", Usage: "for send, don't wait: print the command id to follow with `cmd status`"},
+			{Name: "timeout", Value: "SECS", Usage: "for send, how long to wait for the printer"},
 			{Name: "plate-clear", Usage: "confirm the plate is empty without being asked"},
 		}),
 		Pos: []posArg{{Label: "action", Kind: "ls send status"}},

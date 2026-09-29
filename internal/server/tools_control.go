@@ -70,10 +70,35 @@ func connectState(p map[string]any, uuid string) (string, error) {
 }
 
 type commandResult struct {
-	Printer  string          `json:"printer"`
-	Command  string          `json:"command"`
-	Kwargs   map[string]any  `json:"kwargs"`
-	Response json.RawMessage `json:"response"`
+	Printer string         `json:"printer"`
+	Command string         `json:"command"`
+	Kwargs  map[string]any `json:"kwargs"`
+	// Connect wraps a command it waited for in a "command" object and returns
+	// an asynchronous one bare. These two are the same either way:
+	// get_command takes the id, and the state is where the command got to.
+	CommandID int64           `json:"command_id,omitempty"`
+	State     string          `json:"state,omitempty"`
+	Response  json.RawMessage `json:"response"`
+}
+
+// commandFacts digs the id and the state out of whichever shape Connect used.
+func commandFacts(raw json.RawMessage) (int64, string) {
+	m := decode(raw)
+	if inner, ok := m["command"].(map[string]any); ok {
+		m = inner
+	}
+	var id int64
+	if n := num(m, "id"); n != nil {
+		id = int64(*n)
+	}
+	state := str(m, "state")
+	if state == "" {
+		// A command waited for reports how it ended as an event.
+		if ev, ok := decode(raw)["event"].(map[string]any); ok {
+			state = str(ev, "event")
+		}
+	}
+	return id, state
 }
 
 // runCommand validates a command against what the printer supports and its
@@ -143,7 +168,26 @@ func (s *Server) runCommand(ctx context.Context, p printerSummary, command strin
 	if err := s.connect.JSON(ctx, connect.Request{Method: http.MethodPost, Path: path, Query: q, JSON: body}, &resp); err != nil {
 		return nil, err
 	}
-	return &commandResult{Printer: p.Name, Command: match.Command, Kwargs: kwargs, Response: resp}, nil
+	id, state := commandFacts(resp)
+	return &commandResult{Printer: p.Name, Command: match.Command, Kwargs: kwargs, CommandID: id, State: state, Response: resp}, nil
+}
+
+// connectJobBefore reads the state of the job Prusa Connect shows, so a pause
+// or a stop can report what it acted on the way the direct route does. A
+// printer that won't say is not a reason to refuse the action.
+func connectJobBefore(ctx context.Context, s *Server, uuid string) (string, int64) {
+	detail, err := s.printerDetail(ctx, uuid)
+	if err != nil {
+		return "", 0
+	}
+	state := stateOf(detail)
+	var id int64
+	if job, ok := detail["job_info"].(map[string]any); ok {
+		if n := num(job, "id"); n != nil {
+			id = int64(*n)
+		}
+	}
+	return state, id
 }
 
 // commandStatus is what became of one command sent to the printer.
@@ -381,11 +425,18 @@ func (s *Server) addControlTools() {
 		if cmd == "" {
 			return nil, nil, actionError(in.Action)
 		}
+		// What the job was before is the useful half of the answer, and only
+		// this side of the call knows it.
+		before, jobID := connectJobBefore(ctx, s, t.connect.UUID)
 		res, err := s.runCommand(ctx, t.connect, cmd, nil, false, 0)
 		if err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(withVia(t, map[string]any{"action": action, "result": res}))
+		out := map[string]any{"action": action, "state_before": before, "result": res}
+		if jobID > 0 {
+			out["job_id"] = jobID
+		}
+		return jsonResult(withVia(t, out))
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
