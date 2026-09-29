@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/trevin-lee/prusactl/internal/appdir/appdirtest"
 	"time"
 )
 
@@ -103,7 +105,7 @@ func (m *memStore) Save(t *Token) error {
 func (m *memStore) Clear() error { m.mu.Lock(); defer m.mu.Unlock(); m.tok = nil; return nil }
 
 func TestSessionRefreshesAndRotates(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // keep the refresh lock file out of the real config dir
+	appdirtest.Use(t) // keep the refresh lock file out of the real config dir
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -151,7 +153,7 @@ func TestSessionRefreshesAndRotates(t *testing.T) {
 }
 
 func TestRejectedRefreshKeepsANewerSession(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	appdirtest.Use(t)
 	store := &memStore{tok: &Token{RefreshToken: "old"}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -181,7 +183,7 @@ func TestRejectedRefreshKeepsANewerSession(t *testing.T) {
 }
 
 func TestRejectedAppIDIsAnAPIChangeAndKeepsTheSession(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	appdirtest.Use(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(401)
 		_, _ = w.Write([]byte(`{"error":"invalid_client"}`))

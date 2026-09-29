@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/trevin-lee/prusactl/internal/appdir/appdirtest"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -110,7 +112,7 @@ func (f *fakeConnect) sentCommands() []string {
 
 func connectConnectTools(t *testing.T, fc *fakeConnect) *mcp.ClientSession {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir()) // the refresh lock file lives under the config dir
+	appdirtest.Use(t) // the refresh lock file lives under the config dir
 	srv := httptest.NewServer(fc)
 	t.Cleanup(srv.Close)
 	session := &auth.Session{Store: signedIn{}}

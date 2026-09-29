@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/trevin-lee/prusactl/internal/appdir/appdirtest"
 )
 
 // standIn answers the PrusaLink info endpoint like a printer would.
@@ -40,9 +42,7 @@ func runSetup(t *testing.T, secretValue string, args ...string) {
 // Re-running setup must not leave the replaced printer's secret behind, and
 // --forget must leave nothing but the lock file.
 func TestSetupReplacesAndForgetsSecrets(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	home := appdirtest.Use(t)
 	t.Setenv("PRUSACTL_KEYRING", "file")
 	t.Setenv("PRUSACTL_CONFIG", filepath.Join(home, "config.json"))
 	a, b := standIn(t), standIn(t)

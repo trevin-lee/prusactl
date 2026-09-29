@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -243,7 +244,9 @@ func TestViaIsRefusedWhenImpossible(t *testing.T) {
 	}{
 		{tool: "run_gcode", via: "connect", want: "only works through the direct connection", args: map[string]any{"gcode": "M115"}},
 		{tool: "download_printer_file", via: "connect", want: "only works through the direct connection",
-			args: map[string]any{"path": "/usb/x.bgcode", "local_path": "/tmp/x.bgcode"}},
+			// Absolute means something different on Windows, and the path is
+			// checked before the route is.
+			args: map[string]any{"path": "/usb/x.bgcode", "local_path": filepath.Join(t.TempDir(), "x.bgcode")}},
 		{tool: "get_camera_snapshot", via: "direct", want: "only works through Prusa Connect"},
 		{tool: "get_queue", via: "direct", want: "only works through Prusa Connect"},
 		{tool: "respond_to_dialog", via: "direct", want: "only works through Prusa Connect", args: map[string]any{"button": "Yes"}},
