@@ -35,17 +35,36 @@ func action(pos []string, allowed ...string) (string, []string, error) {
 func printersCmd(ctx context.Context, o options, _ []string) error {
 	return runTool(ctx, "list_printers", map[string]any{}, o.on("json"), func(raw json.RawMessage) error {
 		m := decodeMap(raw)
-		list := rows(m, "connect")
-		list = append(list, rows(m, "direct")...)
-		if len(list) == 0 {
-			return printJSON(raw)
+		// One printer can appear on both routes, under the name each route
+		// knows it by, so each row says which route it came from.
+		type row struct {
+			route string
+			p     map[string]any
 		}
-		for _, p := range list {
-			name := field(p, "name")
+		var list []row
+		for _, p := range rows(m, "connect") {
+			list = append(list, row{"connect", p})
+		}
+		// The direct route reaches one printer, so it answers with that one
+		// rather than a list of them.
+		if one, ok := m["direct"].(map[string]any); ok && len(one) > 0 {
+			list = append(list, row{"direct", one})
+		}
+		if len(list) == 0 {
+			fmt.Println("No printers. Run `prusactl setup` for the one on your network, or `prusactl login` for a Prusa Connect account.")
+			return nil
+		}
+		fmt.Printf("%-24s %-8s %s\n", "NAME", "ROUTE", "STATE / ADDRESS")
+		for _, r := range list {
+			name := field(r.p, "name")
 			if name == "" {
-				name = field(p, "hostname")
+				name = field(r.p, "hostname")
 			}
-			fmt.Printf("%-24s %-10s %s\n", name, field(p, "connect_state"), field(p, "uuid"))
+			where := field(r.p, "connect_state")
+			if where == "" {
+				where = field(r.p, "host")
+			}
+			fmt.Printf("%-24s %-8s %s\n", name, r.route, where)
 		}
 		return nil
 	})
