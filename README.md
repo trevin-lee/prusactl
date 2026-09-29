@@ -1,8 +1,8 @@
 <h1 align="center">prusactl</h1>
 
 <p align="center">
-  <b>Run your Prusa 3D printer from the terminal, or hand it to an AI agent.</b><br>
-  A CLI and <a href="https://modelcontextprotocol.io">MCP</a> server that talks to the printer directly on your network, and through <a href="https://connect.prusa3d.com">Prusa Connect</a> from anywhere.
+  <b>Hand your Prusa 3D printer to an AI agent.</b><br>
+  An <a href="https://modelcontextprotocol.io">MCP</a> server that talks to the printer directly on your network, and through <a href="https://connect.prusa3d.com">Prusa Connect</a> from anywhere, with a small CLI to set it up and check on it.
 </p>
 
 <p align="center">
@@ -17,11 +17,13 @@
 `prusactl mcp` gives an agent such as Claude hands on your printer. It can:
 
 - **Watch:** check state, temperatures, job progress, and (with Connect) the camera.
-- **Print:** upload files, start them, pause, resume, stop, and queue.
-- **Control:** heat, home, move, load and unload filament, and level the bed.
+- **Print:** upload files, start them, pause, resume, and stop, and (with Connect)
+  queue them.
+- **Control:** heat, home, move, load and unload filament, and level the bed:
+  through Connect at any time, or as G-code while the printer is idle.
 - **Answer the printer:** press the buttons on dialogs shown on its screen, such as
   runout or errors. Needs Connect.
-- **Run G-code:** any G-code, over the direct connection.
+- **Run G-code:** any G-code, over the direct connection, while the printer is idle.
 
 It is one Go binary with no browser involved. Setup is two terminal prompts.
 
@@ -38,6 +40,9 @@ It is one Go binary with no browser involved. Setup is two terminal prompts.
 > The printer is showing a dialog. What does it say?
 >
 > What did I print this week, and how many failed?
+
+The camera, cancelling one object, reading a dialog, and print history go
+through Prusa Connect, so those need `prusactl login`; the rest works directly.
 
 ## Install
 
@@ -97,6 +102,10 @@ prusactl login                 # optional: Prusa Connect, for remote access, cam
 
 The PrusaLink password is on the printer under **Settings → Network → PrusaLink**.
 PrusaLink is on by default; if someone turned it off, turn it back on there.
+
+`setup` saves one printer for the direct route; running it again for another
+printer replaces the first (it says so). With several printers, set up the one
+you use most and reach the others through Prusa Connect.
 
 ## Connect an AI agent
 
@@ -187,7 +196,7 @@ The printer's PrusaLink password is kept in the same keychain.
 | `download_printer_file` | direct | Copy a file from the printer to this computer, e.g. to check the slicer settings a print used |
 | `upload_file` | both | Send a local `.bgcode`/`.gcode` to the printer, and optionally start or queue it |
 | `start_print` | both | Print a file already on the printer |
-| `control_print` | both | Pause, resume, continue, or stop |
+| `control_print` | both | Pause, resume, or stop |
 | `get_transfers` | both | File transfers in progress |
 | `run_gcode` | direct | Run G-code, such as heating, homing, moving, or filament changes, while the printer is idle |
 | `get_camera_snapshot` | Connect | Latest camera image, with how old it is |
@@ -243,6 +252,9 @@ to an agent. `--raw` shows them.
   confirmation. `api_request` is raw access and skips these checks.
 - **`run_gcode` runs as a tiny print job.** So it only works while the printer is
   idle, and it shows up in the printer's history.
+- **Files uploaded through Prusa Connect stay in your Connect storage,** which
+  has a quota. `list_connect_files` shows them; delete them in the Connect web
+  app under Files. (Files on the printer itself have `delete_printer_files`.)
 - **Connect's API is unofficial.** Prusa doesn't publish it; prusactl uses the
   same endpoints as connect.prusa3d.com, so a change on Prusa's side can break the
   Connect route. The direct route uses Prusa's documented

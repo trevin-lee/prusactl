@@ -69,7 +69,7 @@ homebrew_casks:
       zsh: completions/_prusactl
       fish: completions/prusactl.fish
     homepage: https://github.com/trevin-lee/prusactl
-    description: Run a Prusa 3D printer from the terminal or an AI agent (CLI + MCP server)
+    description: Hand your Prusa 3D printer to an AI agent (MCP server, with a CLI to set it up)
     license: MIT
     repository:
       owner: trevin-lee

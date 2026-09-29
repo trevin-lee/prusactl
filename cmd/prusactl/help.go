@@ -79,7 +79,10 @@ camera, on-screen dialogs, the print queue, and history.`,
 		Help: `Speaks the Model Context Protocol over stdin and stdout, so an AI agent can
 run the printer. Add it to Claude Code with:
 
-  claude mcp add --scope user prusa -- prusactl mcp`,
+  claude mcp add --scope user prusa -- "$(command -v prusactl)" mcp
+
+That saves the full path, so it works even when the app isn't started from a
+terminal that has your PATH.`,
 	},
 	{
 		Name:    "download",
@@ -144,7 +147,7 @@ func commandNames() []string {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprint(w, "prusactl: run a Prusa printer from the terminal or an AI agent.\n\n")
+	fmt.Fprint(w, "prusactl: hand your Prusa printer to an AI agent (`prusactl mcp`).\nThese commands set it up and check on it.\n\n")
 	fmt.Fprint(w, "Usage:\n  prusactl <command> [arguments]\n\nCommands:\n")
 	for _, c := range commands {
 		fmt.Fprintf(w, "  %-11s %s\n", c.Name, c.Summary)
