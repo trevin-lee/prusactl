@@ -10,7 +10,7 @@ class Prusactl < Formula
 
   def install
     ldflags = "-s -w -X main.version=#{version}"
-    system "go", "build", *std_go_args(ldflags:), "./cmd/prusactl"
+    system "go", "build", *std_go_args(ldflags: ldflags), "./cmd/prusactl"
     generate_completions_from_executable(bin/"prusactl", "completion", base_name: "prusactl")
   end
 
