@@ -289,10 +289,10 @@ func (s *Server) addFileTools() {
 			return nil, nil, err
 		}
 		var out json.RawMessage
-		if err := s.connect.Get(ctx, printerPath(p.UUID, "queue"), pageQuery(min(max(in.Limit, 0), 500), in.Offset, 100), &out); err != nil {
+		if err := s.connect.Get(ctx, printerPath(p.UUID, "queue"), pageQuery(in.Limit, in.Offset, 100), &out); err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(withVia(target{name: p.Name, connect: p}, map[string]any{"queue": out}))
+		return jsonResult(map[string]any{"printer": p.Name, "queue": withNextOffset(out)})
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
@@ -334,7 +334,7 @@ func (s *Server) addFileTools() {
 		if err := s.connect.JSON(ctx, connect.Request{Method: http.MethodPost, Path: printerPath(p.UUID, "queue"), JSON: body}, &out); err != nil {
 			return nil, nil, err
 		}
-		return jsonResult(out)
+		return jsonResult(map[string]any{"printer": p.Name, "queued": out})
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
@@ -350,7 +350,7 @@ func (s *Server) addFileTools() {
 		if err := s.connect.JSON(ctx, connect.Request{Method: http.MethodDelete, Path: path}, nil); err != nil {
 			return nil, nil, err
 		}
-		return textResult("Removed job %d from %s's queue.", in.JobID, p.Name)
+		return jsonResult(map[string]any{"printer": p.Name, "removed": in.JobID})
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
