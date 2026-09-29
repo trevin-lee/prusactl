@@ -97,7 +97,7 @@ func (s *Server) readyToStart(ctx context.Context, t target, plateClear bool) er
 		case "OFFLINE":
 			hint = "; Prusa Connect can't reach it right now"
 		case "ATTENTION":
-			hint = "; a question is waiting on its screen (get_printer shows it, respond_to_dialog answers it)"
+			hint = "; a question is waiting on its screen, and must be answered before it will take a job"
 		case "PRINTING", "PAUSED", "BUSY":
 			hint = "; wait for it to finish, or add the file to the Prusa Connect queue"
 		}
@@ -132,7 +132,7 @@ func startReport(state string) map[string]any {
 	out := map[string]any{"printer_state": state, "printing": state == "PRINTING"}
 	switch {
 	case state == "ATTENTION":
-		out["note"] = "the printer stopped on a question on its screen before printing; get_printer shows it and respond_to_dialog answers it"
+		out["note"] = "the printer stopped on a question on its screen before printing; it must be answered for the job to go on"
 	case canStart(state):
 		out["note"] = "the printer hasn't started yet; check get_printer"
 	}

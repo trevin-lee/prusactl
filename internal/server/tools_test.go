@@ -208,7 +208,7 @@ func TestControlPrintResumesOnlyFromPaused(t *testing.T) {
 
 	fp2 := &fakePrinter{state: "ATTENTION", jobState: "ATTENTION"}
 	cs2 := connectTools(t, fp2)
-	if text, isErr := call(t, cs2, "control_print", map[string]any{"action": "resume"}); !isErr || !strings.Contains(text, "respond_to_dialog") {
+	if text, isErr := call(t, cs2, "control_print", map[string]any{"action": "resume"}); !isErr || !strings.Contains(text, "answered there") {
 		t.Fatalf("resume from ATTENTION: %q", text)
 	}
 	if fp2.called("PUT /api/v1/job") {

@@ -96,8 +96,13 @@ func (s *Server) runCommand(ctx context.Context, p printerSummary, command strin
 		}
 	}
 	if match == nil {
+		seen := map[string]bool{}
 		avail := make([]string, 0, len(cmds))
 		for _, c := range cmds {
+			if seen[c.Command] { // Connect lists some commands twice
+				continue
+			}
+			seen[c.Command] = true
 			avail = append(avail, c.Command)
 		}
 		sort.Strings(avail)
@@ -360,7 +365,7 @@ func (s *Server) addControlTools() {
 			switch action {
 			case "pause", "resume":
 				if job.State == "ATTENTION" || (action != "pause" && job.State != "PAUSED") {
-					return nil, nil, fmt.Errorf("%s's job is %s; the printer only resumes from PAUSED over the local network. A question on its screen must be answered there, or through Prusa Connect (respond_to_dialog)", t.name, job.State)
+					return nil, nil, fmt.Errorf("%s's job is %s; the printer only resumes from PAUSED over the local network. A question on its screen must be answered there, or through Prusa Connect", t.name, job.State)
 				}
 			case "stop":
 				req = link.Request{Method: http.MethodDelete, Path: "/api/v1/job/" + id}

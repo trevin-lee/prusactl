@@ -80,6 +80,16 @@ type connectFilesInput struct {
 	TeamID   int64 `json:"team_id,omitempty" jsonschema:"team whose storage to list; default is the team of the first printer"`
 }
 
+// busyFileAdvice explains PrusaLink's 409 on a file it still holds open. The
+// printer says only "File is busy", which is true of a file just uploaded or
+// selected on its screen, and says nothing about what to do next.
+func busyFileAdvice(err error) error {
+	if !link.IsStatus(err, http.StatusConflict) {
+		return err
+	}
+	return fmt.Errorf("%w (the printer still has the file open, usually because it was just uploaded or is selected on its screen; try again in a moment, or delete it through Prusa Connect with via=\"connect\")", err)
+}
+
 func (s *Server) addFileTools() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "list_printer_files",
@@ -137,7 +147,11 @@ func (s *Server) addFileTools() {
 					_, err = s.direct().JSON(ctx, link.Request{Method: http.MethodDelete, Path: path}, nil)
 				}
 				if err != nil {
-					return nil, nil, fmt.Errorf("deleted %q; failed on %s: %w", in.Paths[:i], p, err)
+					err = busyFileAdvice(err)
+					if i == 0 {
+						return nil, nil, fmt.Errorf("could not delete %s: %w", p, err)
+					}
+					return nil, nil, fmt.Errorf("deleted %s; could not delete %s: %w", strings.Join(in.Paths[:i], ", "), p, err)
 				}
 			}
 			return jsonResult(withVia(t, map[string]any{"deleted": in.Paths}))
@@ -271,6 +285,10 @@ func (s *Server) addFileTools() {
 				return nil, nil, err
 			}
 			if _, err := s.direct().JSON(ctx, link.Request{Method: http.MethodPost, Path: path}, nil); err != nil {
+				if link.IsStatus(err, http.StatusNotFound) {
+					// The printer's 404 here carries no message at all.
+					return nil, nil, fmt.Errorf("%s has no file at %s; its file listing shows what is there, under the short names it stores them by, e.g. /usb/FIT-GA~2.BGC", t.name, in.Path)
+				}
 				return nil, nil, err
 			}
 			out := startReport(s.startedState(ctx, t))
