@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -37,6 +38,10 @@ type fakeConnect struct {
 	// Simulated API changes.
 	renamedList bool // /app/printers lists them under another key
 	noState     bool // printer records carry no connect_state
+
+	events []map[string]any // newest first, as Connect returns them
+	queue  []map[string]any
+	gone   []string // file hashes the delete asked Connect to drop
 }
 
 func (f *fakeConnect) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -66,9 +71,35 @@ func (f *fakeConnect) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.sent = append(f.sent, body.Command)
 		fmt.Fprint(w, `{"event":{"event":"FINISHED"}}`)
+	case r.URL.Path == "/app/printers/u1/events":
+		from, to := page(r, len(f.events))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"events": f.events[from:to],
+			"pager":  map[string]any{"limit": to - from, "offset": from, "total": len(f.events)},
+		})
+	case r.URL.Path == "/app/printers/u1/queue":
+		_ = json.NewEncoder(w).Encode(map[string]any{"queue": f.queue})
+	case r.URL.Path == "/app/teams/1/files/raw" && r.Method == http.MethodDelete:
+		var body struct {
+			Hashes []string `json:"hashes"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.gone = append(f.gone, body.Hashes...)
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// page applies the limit and offset Connect's list endpoints take.
+func page(r *http.Request, total int) (int, int) {
+	from, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
+	if err != nil || limit <= 0 {
+		limit = total
+	}
+	from = min(from, total)
+	return from, min(from+limit, total)
 }
 
 func (f *fakeConnect) sentCommands() []string {

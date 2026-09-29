@@ -25,7 +25,10 @@ type fakePrinter struct {
 	jobState string // "" means no job
 	files    int    // entries in /usb
 	calls    []string
-	upload   struct {
+	// handler answers a request before the defaults, for a test that needs the
+	// printer to behave a particular way. It reports whether it replied.
+	handler func(http.ResponseWriter, *http.Request) bool
+	upload  struct {
 		body    string
 		headers http.Header
 	}
@@ -36,6 +39,9 @@ func (f *fakePrinter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, r.Method+" "+r.URL.Path)
 	w.Header().Set("Content-Type", "application/json")
+	if f.handler != nil && f.handler(w, r) {
+		return
+	}
 	switch {
 	case r.URL.Path == "/api/v1/info":
 		fmt.Fprint(w, `{"hostname":"fake-core-one","serial":"SN1"}`)
