@@ -322,7 +322,8 @@ func (s *Server) addControlTools() {
 			"printing or paused). This is how to heat (M104/M140/M109/M190), home (G28), move (G90/G91 + G1), " +
 			"load/unload filament (M701/M702), level (G29), or send any other command when Prusa Connect isn't " +
 			"available. It shows up on the printer and in history as a short print. Moves act on real hardware: " +
-			"make sure nothing is in the way.",
+			"make sure nothing is in the way. The G-code runs as a one-off job from " +
+			strconv.Quote(macroPath) + " on the printer, which each run overwrites.",
 		Annotations: mutating("Run G-code", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in gcodeInput) (*mcp.CallToolResult, any, error) {
 		if strings.TrimSpace(in.Gcode) == "" {
