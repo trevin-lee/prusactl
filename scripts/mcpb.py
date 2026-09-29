@@ -9,18 +9,42 @@ dist = os.path.join(root, "dist")
 
 # Pick the binaries out of GoReleaser's artifact list.
 artifacts = json.load(open(os.path.join(dist, "artifacts.json")))
-want = {"darwin": ("all", "prusactl-darwin"), "linux": ("amd64", "prusactl-linux"), "windows": ("amd64", "prusactl.exe")}
+# Linux ships both CPUs behind a launcher, so the bundle works on a Raspberry Pi
+# too; macOS is one universal binary, and Windows on ARM runs the x86-64 one.
+want = {
+    ("darwin", "all"): "prusactl-darwin",
+    ("linux", "amd64"): "prusactl-linux-amd64",
+    ("linux", "arm64"): "prusactl-linux-arm64",
+    ("windows", "amd64"): "prusactl.exe",
+}
 bundle = os.path.join(dist, "mcpb")
 shutil.rmtree(bundle, ignore_errors=True)
 os.makedirs(os.path.join(bundle, "server"))
-for goos, (goarch, name) in want.items():
+def executable(path):
+    os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+for (goos, goarch), name in want.items():
     matches = [a for a in artifacts if a.get("type") in ("Binary", "Universal Binary")
                and a.get("goos") == goos and a.get("goarch") == goarch]
     if len(matches) != 1:
         sys.exit(f"expected one {goos}/{goarch} binary, found {len(matches)}")
     dst = os.path.join(bundle, "server", name)
     shutil.copy2(os.path.join(root, matches[0]["path"]), dst)
-    os.chmod(dst, os.stat(dst).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    executable(dst)
+
+# The bundle format picks a command per operating system, not per CPU.
+launcher = os.path.join(bundle, "server", "prusactl-linux")
+with open(launcher, "w") as f:
+    f.write('''#!/bin/sh
+# Runs the build for this machine's CPU.
+dir=$(dirname "$0")
+case $(uname -m) in
+  aarch64 | arm64) exec "$dir/prusactl-linux-arm64" "$@" ;;
+  x86_64 | amd64)  exec "$dir/prusactl-linux-amd64" "$@" ;;
+  *) echo "prusactl: this extension has no build for $(uname -m); install prusactl with Homebrew instead" >&2; exit 1 ;;
+esac
+''')
+executable(launcher)
 
 manifest = json.load(open(os.path.join(root, "mcpb", "manifest.json")))
 manifest["version"] = version
