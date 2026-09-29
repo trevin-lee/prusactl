@@ -65,6 +65,11 @@ type deleteFilesInput struct {
 	Paths []string `json:"paths" jsonschema:"full paths on the printer, e.g. /usb/old.bgcode"`
 }
 
+type deleteConnectFilesInput struct {
+	Hashes []string `json:"hashes" jsonschema:"file hashes from list_connect_files or upload_file"`
+	TeamID int64    `json:"team_id,omitempty" jsonschema:"team owning the files; default is the team of the first printer"`
+}
+
 type queueJobInput struct {
 	printerRef
 	JobID int64 `json:"job_id" jsonschema:"queued job id from get_queue"`
@@ -153,7 +158,7 @@ func (s *Server) addFileTools() {
 			"printer in the background (get_transfers shows progress); there then=print puts it first in the queue and " +
 			"marks the printer ready, and Connect starts it once the file arrives. then=print is refused unless the " +
 			"printer is idle. Before then=print, confirm the plate is clear. Uploading through Connect also leaves a " +
-			"copy in the team's Connect storage, which only the Connect web app can delete.",
+			"copy in the team's Connect storage, which delete_connect_files removes.",
 		Annotations: mutating("Upload print file", false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in uploadInput) (*mcp.CallToolResult, any, error) {
 		then := strings.ToLower(strings.TrimSpace(in.Then))
@@ -384,10 +389,35 @@ func (s *Server) addFileTools() {
 	})
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name: "delete_connect_files",
+		Description: "Delete files from Prusa Connect's cloud storage, freeing the team's quota. Takes the hashes " +
+			"list_connect_files and upload_file report. delete_printer_files is the equivalent for the printer's own storage.",
+		Annotations: mutating("Delete Connect files", true),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in deleteConnectFilesInput) (*mcp.CallToolResult, any, error) {
+		if len(in.Hashes) == 0 {
+			return nil, nil, errors.New("hashes is empty")
+		}
+		team := in.TeamID
+		if team == 0 {
+			p, err := s.connectPrinter(ctx, printerRef{})
+			if err != nil {
+				return nil, nil, err
+			}
+			team = p.TeamID
+		}
+		path := "/app/teams/" + strconv.FormatInt(team, 10) + "/files/raw"
+		body := map[string]any{"hashes": in.Hashes}
+		if err := s.connect.JSON(ctx, connect.Request{Method: http.MethodDelete, Path: path, JSON: body}, nil); err != nil {
+			return nil, nil, err
+		}
+		return jsonResult(map[string]any{"team_id": team, "deleted": in.Hashes})
+	})
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "list_connect_files",
 		Description: "Files stored in Prusa Connect's cloud storage for a team, with the hashes add_to_queue takes. " +
-			"These count against the team's storage quota and can only be deleted in the Connect web app under Files; " +
-			"delete_printer_files removes files from the printer, not from Connect.",
+			"These count against the team's storage quota; delete_connect_files removes them, and " +
+			"delete_printer_files removes files from the printer instead.",
 		Annotations: readOnly("List Connect files"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in connectFilesInput) (*mcp.CallToolResult, any, error) {
 		team := in.TeamID

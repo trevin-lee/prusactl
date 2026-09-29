@@ -25,9 +25,7 @@
   runout or errors. Needs Connect.
 - **Run G-code:** any G-code, over the direct connection, while the printer is idle.
 
-It is one Go binary, and signing in needs no browser: setup is two terminal
-prompts. (Deleting files from Prusa Connect's cloud storage is the one thing
-that still needs the Connect web app.)
+It is one Go binary with no browser involved. Setup is two terminal prompts.
 
 ## Things you can ask
 
@@ -266,9 +264,6 @@ to an agent. `--raw` shows them.
 - **`run_gcode` runs as a tiny print job.** So it only works while the printer is
   idle, and it shows up in the printer's history. It also leaves the file
   `/usb/prusactl-macro.gcode` on the printer, which each run overwrites.
-- **Files uploaded through Prusa Connect stay in your Connect storage,** which
-  has a quota. `list_connect_files` shows them; delete them in the Connect web
-  app under Files. (Files on the printer itself have `delete_printer_files`.)
 - **Connect's API is unofficial.** Prusa doesn't publish it; prusactl uses the
   same endpoints as connect.prusa3d.com, so a change on Prusa's side can break the
   Connect route. The direct route uses Prusa's documented
