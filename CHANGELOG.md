@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4 (2026-09-28)
 
 - Homebrew installs from source, so `brew` no longer prints a deprecation
   warning on every command. Coming from 0.1.3 or earlier, switch once with
