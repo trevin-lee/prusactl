@@ -78,6 +78,13 @@ func TestFlagsParseAnywhere(t *testing.T) {
 	if _, _, err := lookup("setup").parse([]string{"--bogus"}); err == nil || !strings.Contains(err.Error(), "unknown flag --bogus") {
 		t.Fatalf("err = %v", err)
 	}
+	// api goes through the same parser, so a typo isn't sent as the HTTP method.
+	if _, _, err := lookup("api").parse([]string{"--foo", "/api/v1/status"}); err == nil || !strings.Contains(err.Error(), "unknown flag --foo") {
+		t.Fatalf("api err = %v", err)
+	}
+	if opts, pos, err := lookup("api").parse([]string{"/api/v1/status", "--raw"}); err != nil || !opts.on("raw") || len(pos) != 1 {
+		t.Fatalf("api --raw after the path: %v %v", pos, err)
+	}
 }
 
 func TestSuggestion(t *testing.T) {

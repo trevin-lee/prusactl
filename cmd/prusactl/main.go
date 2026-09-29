@@ -351,21 +351,21 @@ func apiCommand(ctx context.Context, cc *connect.Client, lc *link.Client, lcErr 
 	// Responses can carry the printer's API keys and camera tokens. Mask them
 	// unless asked, so output pasted into a chat or read by an agent doesn't
 	// leak them.
-	raw := false
-	rest := args[:0:0]
-	for _, a := range args {
-		if a == "--raw" {
-			raw = true
-		} else {
-			rest = append(rest, a)
-		}
+	opts, args, err := lookup("api").parse(args)
+	if err != nil {
+		return err
 	}
-	args = rest
+	raw := opts.on("raw")
 
 	method := http.MethodGet
 	if len(args) > 0 && !strings.HasPrefix(args[0], "/") {
 		method = strings.ToUpper(args[0])
 		args = args[1:]
+		switch method {
+		case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		default:
+			return fmt.Errorf("api: unknown method %q; use GET, POST, PUT, PATCH, or DELETE (see `prusactl help api`)", method)
+		}
 	}
 	if len(args) == 0 {
 		return errors.New("api: missing PATH, e.g. /api/v1/status (printer) or /app/printers (Connect)")
