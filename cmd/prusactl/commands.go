@@ -285,6 +285,20 @@ func filesCmd(ctx context.Context, o options, pos []string) error {
 			if files == nil {
 				return printJSON(raw)
 			}
+			if storages := rows(files, "storage_list"); len(storages) > 0 {
+				fmt.Printf("%-12s %-10s %s\n", "STORAGE", "TYPE", "PATH")
+				for _, st := range storages {
+					kind := field(st, "type")
+					if field(st, "read_only") == "true" {
+						kind += " (read-only)"
+					}
+					if field(st, "available") != "true" {
+						kind += " (not available)"
+					}
+					fmt.Printf("%-12s %-10s %s\n", field(st, "name"), kind, field(st, "path"))
+				}
+				return nil
+			}
 			for _, e := range rows(files, "entries") {
 				size := field(e, "size")
 				if size == "" {
@@ -471,12 +485,24 @@ func jobsCmd(ctx context.Context, o options, pos []string) error {
 		args["states"] = strings.Split(st, ",")
 	}
 	return runTool(ctx, "list_jobs", args, o.on("json"), func(raw json.RawMessage) error {
-		for _, j := range rows(decodeMap(raw), "jobs") {
+		list := rows(decodeMap(raw), "jobs")
+		if len(list) == 0 {
+			fmt.Println("No jobs.")
+			return nil
+		}
+		fmt.Printf("%-8s %-12s %-20s %s\n", "ID", "STATE", "STARTED", "FILE")
+		for _, j := range list {
 			name := field(j, "file", "display_name")
 			if name == "" {
 				name = field(j, "file", "name")
 			}
-			fmt.Printf("%-8s %-12s %s\n", field(j, "id"), field(j, "state"), name)
+			if name == "" {
+				name = field(j, "path")
+			}
+			if name == "" {
+				name = "-" // Connect kept no file for this one
+			}
+			fmt.Printf("%-8s %-12s %-20s %s\n", field(j, "id"), field(j, "state"), stamp(field(j, "start")), name)
 		}
 		return nil
 	})
