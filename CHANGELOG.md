@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.5 (2026-09-28)
 
 - The MCP bundle no longer tells the agent Prusa Connect is unavailable there.
   It reads the same saved session, so the camera, queue and history work
