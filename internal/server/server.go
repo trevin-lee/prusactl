@@ -82,6 +82,12 @@ func New(session *auth.Session, cc *connect.Client, lc *link.Client, lcErr error
 	return s
 }
 
+// Connect serves this server over t, for a client in the same process. The CLI
+// uses it so its commands go through the very tools an agent calls.
+func (s *Server) Connect(ctx context.Context, t mcp.Transport) (*mcp.ServerSession, error) {
+	return s.mcp.Connect(ctx, t, nil)
+}
+
 // Run serves MCP over stdio until the client disconnects.
 func (s *Server) Run(ctx context.Context) error {
 	return s.mcp.Run(ctx, &mcp.StdioTransport{})

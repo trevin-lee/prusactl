@@ -35,6 +35,10 @@ type command struct {
 	Help    string
 	Flags   []flagSpec
 	Pos     []posArg
+	// Old spelled it differently: the command still runs, and `prusactl help
+	// NAME` still explains it, but it is left out of the listing and the
+	// completions so there is one name for the job.
+	Renamed string
 }
 
 var commands = []*command{
@@ -70,8 +74,13 @@ camera, on-screen dialogs, the print queue, and history.`,
 	},
 	{
 		Name:    "status",
+		Args:    "[flags]",
 		Summary: "Show the printer's state and how it's reachable",
-		Help:    `Shows whether the printer answers directly and whether Prusa Connect is signed in.`,
+		Help: `Shows whether the printer answers directly and whether Prusa Connect is signed in.
+
+--json adds everything the printer reports, including the chamber and the
+running job, under "printer".`,
+		Flags: []flagSpec{{Name: "json", Usage: "print the same facts as JSON"}},
 	},
 	{
 		Name:    "mcp",
@@ -88,7 +97,11 @@ terminal that has your PATH.`,
 		Name:    "download",
 		Args:    "[--overwrite] PATH [DEST]",
 		Summary: "Copy a file from the printer to this computer",
-		Help: `PATH is a file on the printer's storage, e.g. /usb/part.bgcode. DEST is a
+		Renamed: "files get",
+		Help: `The older name for ` + "`prusactl files get`" + `, which does the same thing and is
+where the rest of the file commands live. This name goes on working.
+
+PATH is a file on the printer's storage, e.g. /usb/part.bgcode. DEST is a
 file or folder on this computer; the default is the current folder.`,
 		Flags: []flagSpec{{Name: "overwrite", Usage: "replace DEST if it already exists"}},
 		Pos:   []posArg{{Label: "printer path"}, {Label: "destination", Kind: "files"}},
@@ -102,6 +115,147 @@ Connect. METHOD defaults to GET; JSON is the request body. API keys, tokens,
 and passwords in the response are shown as [redacted] unless you pass --raw.`,
 		Flags: []flagSpec{{Name: "raw", Usage: "show API keys and tokens in the response"}},
 		Pos:   []posArg{{Label: "method or path", Kind: "GET POST PUT PATCH DELETE"}},
+	},
+	{
+		Name:    "printers",
+		Summary: "List the printers on the Prusa Connect account",
+		Help:    `Needs Prusa Connect. The direct route reaches one printer, the one setup saved.`,
+		Flags:   []flagSpec{{Name: "json", Usage: "print the raw JSON result"}},
+	},
+	{
+		Name:    "print",
+		Args:    "[flags] FILE",
+		Summary: "Upload a sliced file and start printing it",
+		Help: `FILE is a .bgcode or .gcode on this computer. The printer must be idle;
+after a finished or stopped print you are asked whether the plate is clear
+(--plate-clear answers yes, for scripts).`,
+		Flags: flags(printerFlags, []flagSpec{
+			{Name: "plate-clear", Usage: "confirm the plate is empty without being asked"},
+			{Name: "destination", Value: "DIR", Usage: "folder on the printer (default /usb/)"},
+			{Name: "overwrite", Usage: "replace a file of the same name on the printer"},
+		}),
+		Pos: []posArg{{Label: "file", Kind: "files"}},
+	},
+	{
+		Name:    "start",
+		Args:    "[flags] PATH",
+		Summary: "Start a file already on the printer",
+		Help:    `PATH is a file on the printer's storage, as ` + "`prusactl files ls`" + ` shows it.`,
+		Flags:   flags(printerFlags, []flagSpec{{Name: "plate-clear", Usage: "confirm the plate is empty without being asked"}}),
+		Pos:     []posArg{{Label: "printer path"}},
+	},
+	{
+		Name:    "pause",
+		Summary: "Pause the running print",
+		Help:    `The printer keeps its place; ` + "`prusactl resume`" + ` carries on.`,
+		Flags:   printerFlags,
+	},
+	{
+		Name:    "resume",
+		Summary: "Resume a paused print",
+		Help:    `Only works from PAUSED. A question on the printer's screen is answered with ` + "`prusactl dialog`" + `.`,
+		Flags:   printerFlags,
+	},
+	{
+		Name:    "stop",
+		Summary: "Stop the running print",
+		Help:    `Final: the job can't be resumed and the part stays on the plate.`,
+		Flags:   printerFlags,
+	},
+	{
+		Name:    "gcode",
+		Args:    `[flags] "G28" ["M104 S215" ...]`,
+		Summary: "Run G-code on the printer",
+		Help: `Runs while the printer is idle, as a one-off job from /usb/prusactl-macro.gcode,
+which each run overwrites. Direct connection only.`,
+		Flags: flags(printerFlags, []flagSpec{{Name: "plate-clear", Usage: "confirm the plate is empty without being asked"}}),
+	},
+	{
+		Name:    "dialog",
+		Args:    "BUTTON",
+		Summary: "Press a button on the printer's screen",
+		Help:    `BUTTON is a label ` + "`prusactl status --json`" + ` shows in dialog_info. Needs Prusa Connect.`,
+		Flags:   printerFlags,
+		Pos:     []posArg{{Label: "button"}},
+	},
+	{
+		Name:    "files",
+		Args:    "ls [PATH] | get PATH [DEST] | put FILE | rm PATH...",
+		Summary: "Browse and manage files on the printer",
+		Help:    `Without an action, lists the printer's storages.`,
+		Flags: flags(printerFlags, pageFlags, []flagSpec{
+			{Name: "destination", Value: "DIR", Usage: "folder on the printer for put (default /usb/)"},
+			{Name: "overwrite", Usage: "replace an existing file"},
+		}),
+		Pos: []posArg{{Label: "action", Kind: "ls get put rm"}},
+	},
+	{
+		Name:    "cloud",
+		Args:    "ls | rm HASH...",
+		Summary: "Files in Prusa Connect's cloud storage",
+		Help:    `Uploading through Prusa Connect leaves a copy here, against the team's quota.`,
+		Flags:   flags(pageFlags, []flagSpec{{Name: "json", Usage: "print the raw JSON result"}}),
+		Pos:     []posArg{{Label: "action", Kind: "ls rm"}},
+	},
+	{
+		Name:    "queue",
+		Args:    "ls | add PATH | rm JOB-ID",
+		Summary: "The Prusa Connect print queue",
+		Help:    `Connect starts the next queued job when the printer is idle and marked ready.`,
+		Flags: flags(printerFlags, pageFlags, []flagSpec{
+			{Name: "hash", Usage: "the argument to add is a Connect storage hash, not a printer path"},
+			{Name: "position", Value: "N", Usage: "0 = front of the queue, -1 = end (default)"},
+		}),
+		Pos: []posArg{{Label: "action", Kind: "ls add rm"}},
+	},
+	{
+		Name:    "jobs",
+		Args:    "[JOB-ID]",
+		Summary: "Print history, or one job",
+		Help:    `Needs Prusa Connect.`,
+		Flags: flags(printerFlags, pageFlags, []flagSpec{
+			{Name: "state", Value: "LIST", Usage: "filter by state, e.g. FIN_OK,FIN_ERROR"},
+		}),
+		Pos: []posArg{{Label: "job id"}},
+	},
+	{
+		Name:    "events",
+		Summary: "The printer's recent events",
+		Help:    `Newest first. Needs Prusa Connect.`,
+		Flags:   flags(printerFlags, pageFlags),
+	},
+	{
+		Name:    "telemetry",
+		Summary: "Recorded temperatures and speeds",
+		Help:    `Needs Prusa Connect.`,
+		Flags:   flags(printerFlags, []flagSpec{{Name: "minutes", Value: "N", Usage: "how far back to look"}}),
+	},
+	{
+		Name:    "transfers",
+		Summary: "File transfers in progress",
+		Help:    `Shows uploads on their way to the printer, with progress.`,
+		Flags:   printerFlags,
+	},
+	{
+		Name:    "camera",
+		Args:    "[FILE]",
+		Summary: "Save a snapshot from the printer's camera",
+		Help: `Writes snapshot.jpg unless you name a file, or pipe it somewhere.
+Needs Prusa Connect and a camera.`,
+		Flags: flags(printerFlags, []flagSpec{{Name: "camera", Value: "ID", Usage: "which camera, when there are several"}}),
+		Pos:   []posArg{{Label: "file", Kind: "files"}},
+	},
+	{
+		Name:    "cmd",
+		Args:    "ls | send NAME [key=value ...] | status COMMAND-ID",
+		Summary: "Run a firmware command through Prusa Connect",
+		Help: `` + "`cmd ls`" + ` lists what this printer accepts. Physical commands act on real
+hardware: check the printer and its camera first.`,
+		Flags: flags(printerFlags, []flagSpec{
+			{Name: "now", Usage: "for ls, only commands the printer accepts right now"},
+			{Name: "plate-clear", Usage: "confirm the plate is empty without being asked"},
+		}),
+		Pos: []posArg{{Label: "action", Kind: "ls send status"}},
 	},
 	{
 		Name:    "completion",
@@ -138,18 +292,30 @@ func lookup(name string) *command {
 	return nil
 }
 
+// listed is the advertised commands: everything but the old names.
+func listed() []*command {
+	out := make([]*command, 0, len(commands))
+	for _, c := range commands {
+		if c.Renamed == "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func commandNames() []string {
-	names := make([]string, len(commands))
-	for i, c := range commands {
+	ls := listed()
+	names := make([]string, len(ls))
+	for i, c := range ls {
 		names[i] = c.Name
 	}
 	return names
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprint(w, "prusactl: hand your Prusa printer to an AI agent (`prusactl mcp`).\nThese commands set it up and check on it.\n\n")
+	fmt.Fprint(w, "prusactl: run your Prusa printer from the terminal, or hand it to an AI\nagent (`prusactl mcp`). Both do the same things.\n\n")
 	fmt.Fprint(w, "Usage:\n  prusactl <command> [arguments]\n\nCommands:\n")
-	for _, c := range commands {
+	for _, c := range listed() {
 		fmt.Fprintf(w, "  %-11s %s\n", c.Name, c.Summary)
 	}
 	fmt.Fprint(w, "\nRun `prusactl help <command>` for details, or see https://github.com/trevin-lee/prusactl\n")
@@ -213,6 +379,7 @@ func unknownCommand(name string) error {
 // suggest returns the command closest to a mistyped name, if one is close.
 func suggest(name string) string {
 	best, bestDist := "", 3
+	// Old names too: someone typing one made a typo, not a discovery.
 	for _, c := range commands {
 		if strings.HasPrefix(c.Name, name) && len(name) >= 2 {
 			return c.Name
@@ -323,7 +490,7 @@ _prusactl() {
     fi
     case ${COMP_WORDS[1]} in
 `, strings.Join(commandNames(), " "))
-	for _, c := range commands {
+	for _, c := range listed() {
 		var all, valued []string
 		for _, f := range c.Flags {
 			all = append(all, "--"+f.Name)
@@ -381,13 +548,13 @@ func zshDesc(s string) string {
 func writeZshCompletion(w io.Writer) {
 	fmt.Fprint(w, "#compdef prusactl\n# zsh completion for prusactl. Generated by `prusactl completion zsh`.\n\n")
 	fmt.Fprint(w, "_prusactl() {\n    local curcontext=$curcontext state line\n    local -a commands\n    commands=(\n")
-	for _, c := range commands {
+	for _, c := range listed() {
 		fmt.Fprintf(w, "        %s\n", zshSingle(c.Name+":"+zshDesc(c.Summary)))
 	}
 	fmt.Fprint(w, "    )\n")
 	fmt.Fprint(w, "    _arguments -C '(- *)--help[show help]' '(- *)--version[print the version]' '1: :->command' '*:: :->args'\n")
 	fmt.Fprint(w, "    case $state in\n    command)\n        _describe -t commands 'prusactl command' commands\n        ;;\n    args)\n        case $line[1] in\n")
-	for _, c := range commands {
+	for _, c := range listed() {
 		specs := []string{zshSingle("(- *)--help[show help]")}
 		for _, f := range c.Flags {
 			if f.Value == "" {
@@ -427,12 +594,12 @@ func writeFishCompletion(w io.Writer) {
 	fmt.Fprint(w, "# fish completion for prusactl. Generated by `prusactl completion fish`.\n\n")
 	fmt.Fprint(w, "complete -c prusactl -f\n")
 	top := fmt.Sprintf("-n 'not __fish_seen_subcommand_from %s'", names)
-	for _, c := range commands {
+	for _, c := range listed() {
 		fmt.Fprintf(w, "complete -c prusactl %s -a %s -d %s\n", top, c.Name, fishQuote(c.Summary))
 	}
 	fmt.Fprintf(w, "complete -c prusactl %s -l help -d 'Show help'\n", top)
 	fmt.Fprintf(w, "complete -c prusactl %s -l version -d 'Print the version'\n", top)
-	for _, c := range commands {
+	for _, c := range listed() {
 		cond := fmt.Sprintf("-n '__fish_seen_subcommand_from %s'", c.Name)
 		for _, f := range c.Flags {
 			x := ""

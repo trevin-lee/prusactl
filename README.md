@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>Hand your Prusa 3D printer to an AI agent.</b><br>
-  An <a href="https://modelcontextprotocol.io">MCP</a> server that talks to the printer directly on your network, and through <a href="https://connect.prusa3d.com">Prusa Connect</a> from anywhere, with a small CLI to set it up and check on it.
+  An <a href="https://modelcontextprotocol.io">MCP</a> server that talks to the printer directly on your network, and through <a href="https://connect.prusa3d.com">Prusa Connect</a> from anywhere — and a CLI that does everything the agent can.
 </p>
 
 <p align="center">
@@ -226,12 +226,38 @@ prusactl login                     optional: sign in to Prusa Connect
 prusactl logout                    forget the Prusa Connect session
 prusactl status                    printer state and how it is reachable
 prusactl mcp                       run the MCP server on stdio
-prusactl download PATH [DEST]      copy a file from the printer to this computer
+
+prusactl printers                  the printers on the Prusa Connect account
+prusactl print FILE                upload a sliced file and start printing it
+prusactl start PATH                start a file already on the printer
+prusactl pause | resume | stop     control the running print
+prusactl gcode "G28" ["M104 S215"] run G-code as a one-off job
+prusactl dialog BUTTON             answer a question on the printer's screen
+prusactl files ls|get|put|rm       browse and manage files on the printer
+prusactl cloud ls|rm               files in Prusa Connect's cloud storage
+prusactl queue ls|add|rm           the Prusa Connect print queue
+prusactl jobs [JOB-ID]             print history, or one job
+prusactl events                    the printer's recent events
+prusactl telemetry                 recorded temperatures and speeds
+prusactl transfers                 file transfers in progress
+prusactl camera [FILE]             save a snapshot from the printer's camera
+prusactl cmd ls|send|status        run a firmware command through Prusa Connect
+
 prusactl api [METHOD] PATH [JSON]  /api/... to the printer, /app/... to Prusa Connect
 prusactl completion bash|zsh|fish  print a shell completion script
 prusactl help [COMMAND]            the command list, or one command's details
 prusactl version                   print the version (--version does the same)
 ```
+
+The printer commands run the very tools the MCP server exposes, over an
+in-memory connection, so the CLI and an agent reach the printer by the same code
+path with the same safety checks, and neither can do something the other can't.
+Every one of them takes `--printer NAME` to pick a printer, `--via direct` or
+`--via connect` to force a route, and `--json` for the tool's own result.
+
+The same plate check applies: after a finished or stopped print, anything that
+starts a job asks whether the plate is clear. `--plate-clear` answers yes, for
+scripts.
 
 `prusactl help <command>` (or `<command> --help`) explains a command and its
 flags, and flags work before or after the arguments. Tab completion covers
@@ -241,10 +267,6 @@ and `prusactl help completion` shows how to add it otherwise.
 `prusactl setup --forget` removes the saved printer. `--api-key` uses a PrusaLink
 API key instead of the password, and `--password-stdin` reads the secret from a
 pipe.
-
-The CLI sets prusactl up and reads from the printer; it deliberately has no
-commands that print or write to it. Ask the agent for those, or use `prusactl
-api` for a one-off call.
 
 `prusactl api` masks API keys and tokens in responses (Connect's printer record
 carries the PrusaLink and Connect keys), so its output is safe to paste or hand

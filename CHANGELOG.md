@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+- The CLI does everything the agent can. `printers`, `print`, `start`, `pause`,
+  `resume`, `stop`, `gcode`, `dialog`, `files`, `cloud`, `queue`, `jobs`,
+  `events`, `telemetry`, `transfers`, `camera` and `cmd` run the very tools the
+  MCP server exposes, over an in-memory connection, so both surfaces share one
+  implementation and one set of safety checks. `--json` gives the tool's own
+  result; without it each command prints a table.
+- `prusactl status --json` adds everything the printer reports, including the
+  chamber temperature and the running job.
+- `prusactl download` is now `prusactl files get`, alongside `files ls`, `put`
+  and `rm`. The old name still works.
+- `delete_connect_files` deletes files from Prusa Connect's cloud storage, which
+  had no way to delete what `upload_file` left there.
+- `get_printer` reports the same handful of facts, in the same place, whichever
+  route answered: `summary` carries state, temperatures, and the running job.
+  The route's own reply is still there in full.
+- `get_command` works. It asked for an endpoint Prusa Connect doesn't have;
+  Connect records a command's life in the event log, so that is where it looks.
+- Mistyped flags are refused by every command. `status --jsom` used to be
+  ignored, printing the wrong kind of output without a word.
+- Errors a person reads no longer name MCP tools they can't run, and a file the
+  printer holds open explains itself instead of only saying "File is busy".
+
 ## 0.1.6 (2026-09-28)
 
 - `connection_status` no longer hands the agent the whole Prusa Account record

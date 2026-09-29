@@ -95,6 +95,9 @@ func run(ctx context.Context, args []string) error {
 
 	session := auth.NewSession()
 	if name == "logout" {
+		if err := noArguments(cmd, rest, nil); err != nil {
+			return err
+		}
 		wasSignedIn := session.SignedIn()
 		if err := session.Logout(); err != nil {
 			return err
@@ -110,15 +113,56 @@ func run(ctx context.Context, args []string) error {
 	lc, lcErr := link.Open()
 	switch name {
 	case "login":
-		return login(ctx, session, cc, lc, lcErr)
+		return noArguments(cmd, rest, func() error { return login(ctx, session, cc, lc, lcErr) })
 	case "status":
+		opts, pos, err := cmd.parse(rest)
+		if err != nil {
+			return err
+		}
+		if len(pos) > 0 {
+			return fmt.Errorf("status: takes no arguments, got %q (see `prusactl help status`)", pos[0])
+		}
+		if opts.on("json") {
+			return statusJSON(ctx)
+		}
 		return status(ctx, server.New(session, cc, lc, lcErr, buildVersion()), lc)
 	case "mcp":
-		return server.New(session, cc, lc, lcErr, buildVersion()).Run(ctx)
+		return noArguments(cmd, rest, func() error {
+			return server.New(session, cc, lc, lcErr, buildVersion()).Run(ctx)
+		})
 	case "download":
 		return download(ctx, lc, lcErr, rest)
 	case "api":
 		return apiCommand(ctx, cc, lc, lcErr, rest)
+	}
+
+	// The printer commands go through the MCP tools, so the CLI and an agent
+	// share one implementation and one set of safety checks.
+	handlers := map[string]func(context.Context, options, []string) error{
+		"printers":  printersCmd,
+		"print":     printCmd,
+		"start":     startCmd,
+		"pause":     controlCmd("pause"),
+		"resume":    controlCmd("resume"),
+		"stop":      controlCmd("stop"),
+		"gcode":     gcodeCmd,
+		"dialog":    dialogCmd,
+		"files":     filesCmd,
+		"cloud":     cloudCmd,
+		"queue":     queueCmd,
+		"jobs":      jobsCmd,
+		"events":    eventsCmd,
+		"telemetry": telemetryCmd,
+		"transfers": transfersCmd,
+		"camera":    cameraCmd,
+		"cmd":       cmdCmd,
+	}
+	if h, ok := handlers[name]; ok {
+		opts, pos, err := cmd.parse(rest)
+		if err != nil {
+			return err
+		}
+		return h(ctx, opts, pos)
 	}
 	return unknownCommand(name)
 }
@@ -327,6 +371,36 @@ func status(ctx context.Context, srv *server.Server, lc *link.Client) error {
 	return nil
 }
 
+// statusJSON is the same two facts the plain output shows, for a script: how
+// each route stands, and what the printer itself reports. It runs the same
+// tools an agent would, so neither can see something the other can't.
+func statusJSON(ctx context.Context) error {
+	tc, err := openTools(ctx)
+	if err != nil {
+		return err
+	}
+	defer tc.close()
+	out := map[string]any{}
+	conn, err := tc.call(ctx, "connection_status", map[string]any{})
+	if err != nil {
+		return err
+	}
+	for k, v := range decodeMap(conn) {
+		out[k] = v
+	}
+	// A printer that isn't set up or isn't answering is the connection's story
+	// to tell, already in out; there is simply no printer to report.
+	if printer, err := tc.call(ctx, "get_printer", map[string]any{}); err == nil {
+		out["printer"] = decodeMap(printer)
+	}
+	b, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(b))
+	return nil
+}
+
 // connectLine summarizes a printer from Prusa Connect's printer list.
 func connectLine(p map[string]any) string {
 	line := fmt.Sprint(p["connect_state"])
@@ -460,6 +534,23 @@ func apiCommand(ctx context.Context, cc *connect.Client, lc *link.Client, lcErr 
 		fmt.Fprintln(os.Stderr, "(API keys and tokens shown as [redacted]; add --raw to see them)")
 	}
 	return nil
+}
+
+// noArguments runs a command that takes neither flags nor arguments, having
+// first turned down anything passed to it. A mistyped --json is worth saying
+// out loud: silently ignoring it would hand back the wrong kind of output.
+func noArguments(c *command, args []string, run func() error) error {
+	_, pos, err := c.parse(args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 0 {
+		return fmt.Errorf("%s: takes no arguments, got %q (see `prusactl help %s`)", c.Name, pos[0], c.Name)
+	}
+	if run == nil {
+		return nil
+	}
+	return run()
 }
 
 // parseFlags parses fs from args and returns the positional arguments. Unlike

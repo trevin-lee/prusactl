@@ -35,7 +35,7 @@ func TestCompletionsCoverEveryCommandAndFlag(t *testing.T) {
 		var b bytes.Buffer
 		write(&b)
 		script := b.String()
-		for _, c := range commands {
+		for _, c := range listed() {
 			if !strings.Contains(script, c.Name) {
 				t.Errorf("%s completion lacks the %s command", shell, c.Name)
 			}
