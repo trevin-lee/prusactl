@@ -34,12 +34,15 @@ import (
 
 var version = "" // set with -ldflags "-X main.version=..."
 
+// buildVersion reports the version the same way however prusactl was built:
+// release builds set it through ldflags ("0.1.3"), `go install` reads it from
+// the module ("v0.1.3").
 func buildVersion() string {
 	if version != "" {
-		return version
+		return strings.TrimPrefix(version, "v")
 	}
 	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-		return bi.Main.Version
+		return strings.TrimPrefix(bi.Main.Version, "v")
 	}
 	return "dev"
 }
@@ -92,8 +95,13 @@ func run(ctx context.Context, args []string) error {
 
 	session := auth.NewSession()
 	if name == "logout" {
+		wasSignedIn := session.SignedIn()
 		if err := session.Logout(); err != nil {
 			return err
+		}
+		if !wasSignedIn {
+			fmt.Println("You weren't signed in to Prusa Connect.")
+			return nil
 		}
 		fmt.Println("Signed out of Prusa Connect; the saved session was removed.")
 		return nil
