@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-09-29)
 
 - The CLI does everything the agent can. `printers`, `print`, `start`, `pause`,
   `resume`, `stop`, `gcode`, `dialog`, `files`, `cloud`, `queue`, `jobs`,
