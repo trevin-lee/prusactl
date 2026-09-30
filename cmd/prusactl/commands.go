@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Every command here is a thin wrapper over the MCP tool of the same purpose,
@@ -154,7 +155,14 @@ func transfersCmd(ctx context.Context, o options, pos []string) error {
 			name = field(t, "path")
 		}
 		fmt.Println(name)
-		parts := []string{field(t, "state")}
+		// Each route reports its own subset: the printer says what kind of
+		// transfer and how long is left, Connect says what state it is in.
+		var parts []string
+		for _, key := range []string{"state", "type"} {
+			if v := field(t, key); v != "" {
+				parts = append(parts, v)
+			}
+		}
 		if p := field(t, "progress"); p != "" {
 			if f, err := strconv.ParseFloat(p, 64); err == nil {
 				parts = append(parts, fmt.Sprintf("%.0f%%", f))
@@ -162,6 +170,14 @@ func transfersCmd(ctx context.Context, o options, pos []string) error {
 		}
 		if sz := field(t, "size"); sz != "" {
 			parts = append(parts, sz+" bytes")
+		}
+		if r := field(t, "time_remaining"); r != "" {
+			if f, err := strconv.ParseFloat(r, 64); err == nil {
+				parts = append(parts, (time.Duration(f)*time.Second).String()+" left")
+			}
+		}
+		if len(parts) == 0 {
+			parts = append(parts, "in progress")
 		}
 		fmt.Printf("  %s\n", strings.Join(parts, ", "))
 		return nil
@@ -183,7 +199,7 @@ func plateClear(o options) map[string]any {
 
 func withPlateConfirm(ctx context.Context, o options, name string, args map[string]any, render func(json.RawMessage) error) error {
 	err := runTool(ctx, name, args, o.on("json"), render)
-	if err == nil || !strings.Contains(err.Error(), "plate_clear") {
+	if !needsPlateAnswer(err) {
 		return err
 	}
 	// The printer is FINISHED or STOPPED: the last part may still be there.
@@ -196,6 +212,13 @@ func withPlateConfirm(ctx context.Context, o options, name string, args map[stri
 	}
 	args["plate_clear"] = true
 	return runTool(ctx, name, args, o.on("json"), render)
+}
+
+// needsPlateAnswer reports whether a tool refused because nobody has confirmed
+// the plate is empty. It reads the tool's own words, so nothing may reword the
+// error before this has seen it.
+func needsPlateAnswer(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "plate_clear")
 }
 
 // started reports what a job-starting tool did, whichever route ran it. A file
@@ -299,7 +322,7 @@ func dialogCmd(ctx context.Context, o options, pos []string) error {
 	args["button"] = pos[0]
 	return runTool(ctx, "respond_to_dialog", args, o.on("json"), func(raw json.RawMessage) error {
 		m := decodeMap(raw)
-		button := field(m, "button")
+		button := field(m, "pressed")
 		if button == "" {
 			button = pos[0]
 		}
@@ -317,6 +340,9 @@ func filesCmd(ctx context.Context, o options, pos []string) error {
 	}
 	switch act {
 	case "ls":
+		if err := notForAction(o, "files", act, "destination", "overwrite"); err != nil {
+			return err
+		}
 		args, err := pageArgs(o, printerArgs(o))
 		if err != nil {
 			return err
@@ -371,12 +397,22 @@ func filesCmd(ctx context.Context, o options, pos []string) error {
 			return nil
 		})
 	case "get":
+		if err := notForAction(o, "files", act, "limit", "offset", "destination"); err != nil {
+			return err
+		}
 		if len(rest) == 0 || len(rest) > 2 {
 			return errors.New("files get: usage: prusactl files get PATH [DEST]")
 		}
 		dest := "."
 		if len(rest) == 2 {
 			dest = rest[1]
+		}
+		// A trailing slash says "into this folder", and filepath.Abs drops it:
+		// without this, `files get X out/` quietly wrote a file named "out".
+		if strings.HasSuffix(dest, string(os.PathSeparator)) || strings.HasSuffix(dest, "/") {
+			if st, err := os.Stat(dest); err != nil || !st.IsDir() {
+				return fmt.Errorf("files get: %s is not a folder; make it first, or name the file to write", dest)
+			}
 		}
 		local, err := filepath.Abs(dest) // the tool takes an absolute path
 		if err != nil {
@@ -393,6 +429,9 @@ func filesCmd(ctx context.Context, o options, pos []string) error {
 			return nil
 		})
 	case "put":
+		if err := notForAction(o, "files", act, "limit", "offset"); err != nil {
+			return err
+		}
 		if len(rest) != 1 {
 			return errors.New("files put: usage: prusactl files put FILE")
 		}
@@ -417,6 +456,9 @@ func filesCmd(ctx context.Context, o options, pos []string) error {
 			return nil
 		})
 	default: // rm
+		if err := notForAction(o, "files", "rm", "limit", "offset", "destination", "overwrite"); err != nil {
+			return err
+		}
 		if len(rest) == 0 {
 			return errors.New("files rm: usage: prusactl files rm PATH [PATH...]")
 		}
@@ -437,6 +479,9 @@ func cloudCmd(ctx context.Context, o options, pos []string) error {
 		return err
 	}
 	if act == "rm" {
+		if err := notForAction(o, "cloud", act, "limit", "offset"); err != nil {
+			return err
+		}
 		if len(rest) == 0 {
 			return errors.New("cloud rm: usage: prusactl cloud rm HASH [HASH...]")
 		}
@@ -500,6 +545,9 @@ func queueCmd(ctx context.Context, o options, pos []string) error {
 	}
 	switch act {
 	case "ls":
+		if err := notForAction(o, "queue", act, "hash", "position"); err != nil {
+			return err
+		}
 		args, err := pageArgs(o, printerArgs(o))
 		if err != nil {
 			return err
@@ -647,6 +695,9 @@ func cmdCmd(ctx context.Context, o options, pos []string) error {
 	}
 	switch act {
 	case "ls":
+		if err := notForAction(o, "cmd", act, "async", "timeout", "plate-clear"); err != nil {
+			return err
+		}
 		args := printerArgs(o)
 		if o.on("now") {
 			args["executable_now"] = true
@@ -671,6 +722,9 @@ func cmdCmd(ctx context.Context, o options, pos []string) error {
 			return nil
 		})
 	case "status":
+		if err := notForAction(o, "cmd", act, "async", "timeout", "now", "plate-clear"); err != nil {
+			return err
+		}
 		if len(rest) != 1 {
 			return errors.New("cmd status: usage: prusactl cmd status COMMAND-ID")
 		}
@@ -689,6 +743,9 @@ func cmdCmd(ctx context.Context, o options, pos []string) error {
 			return nil
 		})
 	default: // send
+		if err := notForAction(o, "cmd", "send", "now"); err != nil {
+			return err
+		}
 		if len(rest) == 0 {
 			return errors.New(`cmd send: usage: prusactl cmd send NAME [key=value ...], e.g. cmd send SET_NOZZLE_TEMPERATURE nozzle_temperature=215; "prusactl cmd ls" names the arguments each command takes`)
 		}
@@ -698,6 +755,9 @@ func cmdCmd(ctx context.Context, o options, pos []string) error {
 			args["kwargs"] = kw
 		}
 		if o.on("async") {
+			if o.given("timeout") {
+				return errors.New("cmd send: --timeout is how long to wait, so it can't be used with --async")
+			}
 			args["async"] = true
 		}
 		if t := o.str("timeout"); t != "" {
@@ -778,6 +838,9 @@ func cameraCmd(ctx context.Context, o options, pos []string) error {
 		dest = "snapshot" + ext
 	}
 	if dest == "" {
+		if o.on("json") {
+			return errors.New("camera: --json describes where the picture was saved, so name a file to write it to")
+		}
 		_, err := os.Stdout.Write(img)
 		return err
 	}

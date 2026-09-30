@@ -100,7 +100,7 @@ func runTool(ctx context.Context, name string, args map[string]any, jsonOut bool
 	defer tc.close()
 	raw, err := tc.call(ctx, name, args)
 	if err != nil {
-		return asFlags(err)
+		return err
 	}
 	if jsonOut || render == nil {
 		return printJSON(raw)
@@ -108,21 +108,45 @@ func runTool(ctx context.Context, name string, args map[string]any, jsonOut bool
 	return render(raw)
 }
 
-// asFlags spells a tool's arguments the way the terminal takes them. The tools
-// are written for an agent calling them by name; the same sentence reaching a
-// person should tell them which flag to add, not which JSON field.
-var argSpellings = strings.NewReplacer(
-	"set overwrite to replace it", "add --overwrite to replace it",
-	"pass overwrite=true to replace it", "add --overwrite to replace it",
-	"via=connect isn't possible here; leave via out", "--via connect isn't possible here; leave --via out",
-	"via=direct isn't possible here; leave via out", "--via direct isn't possible here; leave --via out",
-	"pass exactly one of path or hash", "pass a path, or a hash with --hash",
-	"call again with plate_clear=true", "run it again with --plate-clear",
-	"plate_clear: true", "--plate-clear",
-	"pass printer as one of", "pass --printer as one of",
-	"pass team_id", "pass --printer for the team",
-	`delete it through Prusa Connect with via="connect"`, "delete it through Prusa Connect with --via connect",
-)
+// asFlags spells a tool's arguments the way the terminal takes them, for the
+// one place that shows an error to a person. It must not run any earlier:
+// withPlateConfirm decides whether to ask about the plate by reading the
+// tool's own words, and a rewritten message stopped matching, which quietly
+// turned the question into a refusal.
+// Each rule rewrites one sentence a tool produces. anchor is a stretch of that
+// sentence carrying no interpolated value, so a test can check the tool still
+// says it: these are prose couplings across a package boundary, and the only
+// thing that keeps them honest is noticing when the prose moves.
+type spelling struct{ anchor, from, to string }
+
+var spellings = []spelling{
+	{"; set overwrite to replace it",
+		"set overwrite to replace it", "add --overwrite to replace it"},
+	{"pass overwrite=true to replace it",
+		"pass overwrite=true to replace it", "add --overwrite to replace it"},
+	{"isn't possible here; leave via out",
+		"isn't possible here; leave via out", "isn't possible here; leave --via out"},
+	{"pass exactly one of path or hash",
+		"pass exactly one of path or hash", "pass a path, or a hash with --hash"},
+	{"then call again with plate_clear=true",
+		"call again with plate_clear=true", "run it again with --plate-clear"},
+	{"; pass printer as one of",
+		"pass printer as one of", "pass --printer as one of"},
+	{"or delete it through Prusa Connect with",
+		`delete it through Prusa Connect with via="connect"`, "delete it through Prusa Connect with --via connect"},
+	// via=connect and via=direct reach the reader interpolated, so they are
+	// rewritten on their own rather than as part of a sentence.
+	{"", "via=connect", "--via connect"},
+	{"", "via=direct", "--via direct"},
+}
+
+var argSpellings = func() *strings.Replacer {
+	pairs := make([]string, 0, len(spellings)*2)
+	for _, r := range spellings {
+		pairs = append(pairs, r.from, r.to)
+	}
+	return strings.NewReplacer(pairs...)
+}()
 
 func asFlags(err error) error {
 	if err == nil {
@@ -216,6 +240,18 @@ func noArgs(name string, pos []string) error {
 		return nil
 	}
 	return fmt.Errorf("%s: takes no arguments, got %q (see `prusactl help %s`)", name, pos[0], name)
+}
+
+// notForAction refuses a flag that the chosen action ignores. A flag quietly
+// dropped is the same trap as an argument quietly dropped: it looks like it
+// worked and answers a different question.
+func notForAction(o options, name, act string, flags ...string) error {
+	for _, f := range flags {
+		if o.given(f) {
+			return fmt.Errorf("%s %s: --%s does not apply here (see `prusactl help %s`)", name, act, f, name)
+		}
+	}
+	return nil
 }
 
 // atMost refuses more arguments than a command reads.

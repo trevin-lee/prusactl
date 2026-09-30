@@ -16,23 +16,26 @@ func TestCurrentTransferIgnoresTheHistory(t *testing.T) {
 		{"id":3,"state":"FIN_OK","end":1790654238,"path":"/usb/done.bgcode"},
 		{"id":2,"state":"FIN_ERROR","end":1790654100,"path":"/usb/failed.bgcode"}
 	]}`)
-	if got := currentTransfer(history); string(got) != "null" {
-		t.Errorf("reported a finished transfer as running: %s", got)
+	if got, err := currentTransfer(history); err != nil || string(got) != "null" {
+		t.Errorf("reported a finished transfer as running: %s %v", got, err)
 	}
 
 	running := json.RawMessage(`{"transfers":[
 		{"id":4,"state":"TRANSFERING","path":"/usb/now.bgcode"},
 		{"id":3,"state":"FIN_OK","end":1790654238,"path":"/usb/done.bgcode"}
 	]}`)
-	got := currentTransfer(running)
+	got, err := currentTransfer(running)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if b := compactTransfer(got); b == nil {
 		t.Fatalf("missed the running transfer: %s", got)
 	} else if b.(*transferBrief).Path != "/usb/now.bgcode" {
 		t.Errorf("picked %+v", b)
 	}
 
-	if got := currentTransfer(json.RawMessage(`{"transfers":[]}`)); string(got) != "null" {
-		t.Errorf("an empty history reported a transfer: %s", got)
+	if got, err := currentTransfer(json.RawMessage(`{"transfers":[]}`)); err != nil || string(got) != "null" {
+		t.Errorf("an empty history reported a transfer: %s %v", got, err)
 	}
 }
 
@@ -87,21 +90,41 @@ func TestWithStoragesGivesOneName(t *testing.T) {
 // Connect wraps a command it waited for and returns an asynchronous one bare;
 // the id is what get_command takes, so it has to come out of either.
 func TestCommandFactsReadsBothReplies(t *testing.T) {
-	for name, raw := range map[string]string{
-		"async": `{"id":3099,"command":"HOME","state":"CREATED"}`,
-		"sync":  `{"command":{"id":3099,"command":"HOME","state":"CREATED"},"event":{"event":"FINISHED"}}`,
+	for name, tc := range map[string]struct{ raw, want string }{
+		"async": {`{"id":3099,"command":"HOME","state":"CREATED"}`, "CREATED"},
+		"sync":  {`{"command":{"id":3099,"command":"HOME","state":"CREATED"},"event":{"event":"FINISHED"}}`, "FINISHED"},
+		// The record says the command was created; the event says the printer
+		// turned it down. Reporting "CREATED" here reads as success.
+		"rejected": {`{"command":{"id":3099,"command":"HOME","state":"CREATED"},"event":{"event":"REJECTED","reason":"BUSY"}}`, "REJECTED"},
 	} {
-		id, state := commandFacts(json.RawMessage(raw))
+		id, state := commandFacts(json.RawMessage(tc.raw))
 		if id != 3099 {
 			t.Errorf("%s id = %d", name, id)
 		}
-		if state == "" {
-			t.Errorf("%s state is empty", name)
+		if state != tc.want {
+			t.Errorf("%s state = %q, want %q", name, state, tc.want)
 		}
 	}
 
 	// A reply with neither is not a reason to fail; it just says less.
 	if id, state := commandFacts(json.RawMessage(`{}`)); id != 0 || state != "" {
 		t.Errorf("empty reply gave %d %q", id, state)
+	}
+}
+
+// A reply that can't be read is not a reply saying nothing is happening: that
+// answer is indistinguishable from the truth, and an agent watching an upload
+// would take it as arrived.
+func TestCurrentTransferReportsAChangedAPI(t *testing.T) {
+	if _, err := currentTransfer(json.RawMessage(`{"items":[]}`)); err == nil {
+		t.Error("a renamed transfers field passed as 'nothing is being transferred'")
+	}
+	if _, err := currentTransfer(json.RawMessage(`not json`)); err == nil {
+		t.Error("an unreadable reply passed as 'nothing is being transferred'")
+	}
+	// An empty list really does mean nothing is happening.
+	got, err := currentTransfer(json.RawMessage(`{"transfers":[]}`))
+	if err != nil || string(got) != "null" {
+		t.Errorf("empty list: %s %v", got, err)
 	}
 }

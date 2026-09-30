@@ -103,7 +103,7 @@ where the rest of the file commands live. This name goes on working.
 
 PATH is a file on the printer's storage, e.g. /usb/part.bgcode. DEST is a
 file or folder on this computer; the default is the current folder.`,
-		Flags: []flagSpec{{Name: "overwrite", Usage: "replace DEST if it already exists"}},
+		Flags: flags(printerFlags, []flagSpec{{Name: "overwrite", Usage: "replace DEST if it already exists"}}),
 		Pos:   []posArg{{Label: "printer path"}, {Label: "destination", Kind: "files"}},
 	},
 	{
@@ -430,8 +430,31 @@ func editDistance(a, b string) int {
 // options are a command's parsed flags.
 type options struct{ fs *flag.FlagSet }
 
-func (o options) str(name string) string { return o.fs.Lookup(name).Value.String() }
-func (o options) on(name string) bool    { return o.fs.Lookup(name).Value.String() == "true" }
+// str and on read a flag the command declared. A command that asks for one it
+// doesn't have is a mistake in the table, not in what the user typed, so it
+// answers empty rather than bringing the program down mid-command.
+func (o options) str(name string) string {
+	f := o.fs.Lookup(name)
+	if f == nil {
+		return ""
+	}
+	return f.Value.String()
+}
+
+func (o options) on(name string) bool { return o.str(name) == "true" }
+
+// given reports whether the flag was actually typed, as opposed to sitting at
+// its default. A command with several actions uses it to refuse a flag that
+// means nothing for the action chosen.
+func (o options) given(name string) bool {
+	found := false
+	o.fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
+}
 
 // parse parses args against c's flags, accepting flags before, between, or
 // after the positional arguments, and returns the positional ones.

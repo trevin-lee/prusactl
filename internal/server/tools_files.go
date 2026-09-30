@@ -67,8 +67,9 @@ type deleteFilesInput struct {
 }
 
 type deleteConnectFilesInput struct {
-	Hashes []string `json:"hashes" jsonschema:"file hashes from list_connect_files or upload_file"`
-	TeamID int64    `json:"team_id,omitempty" jsonschema:"team owning the files; default is the team of the first printer"`
+	printerRef          // only to find the team the files belong to
+	Hashes     []string `json:"hashes" jsonschema:"file hashes from list_connect_files or upload_file"`
+	TeamID     int64    `json:"team_id,omitempty" jsonschema:"team owning the files; default is the team of the named printer"`
 }
 
 type queueJobInput struct {
@@ -79,6 +80,20 @@ type queueJobInput struct {
 type connectFilesInput struct {
 	pagedRef       // default 50
 	TeamID   int64 `json:"team_id,omitempty" jsonschema:"team whose storage to list; default is the team of the first printer"`
+}
+
+// teamOf works out whose cloud storage is meant. Connect's storage belongs to a
+// team, not a printer, but a printer is how anyone names one: an explicit
+// team_id wins, otherwise the team of the printer referred to.
+func (s *Server) teamOf(ctx context.Context, ref printerRef, teamID int64) (int64, error) {
+	if teamID != 0 {
+		return teamID, nil
+	}
+	p, err := s.connectPrinter(ctx, ref)
+	if err != nil {
+		return 0, fmt.Errorf("%w, or name the team with team_id", err)
+	}
+	return p.TeamID, nil
 }
 
 // withStorages gives a storage listing one name for the list, whichever route
@@ -109,14 +124,17 @@ func withStorages(raw json.RawMessage) json.RawMessage {
 // down to the outline of every object on the plate, which is not what "is
 // anything being sent to the printer?" is asking.
 type transferBrief struct {
-	Name        string   `json:"name,omitempty"`
-	Path        string   `json:"path,omitempty"`
-	State       string   `json:"state,omitempty"`
-	Type        string   `json:"type,omitempty"`
-	Size        *float64 `json:"size,omitempty"`
-	Transferred *float64 `json:"transferred,omitempty"`
-	Progress    *float64 `json:"progress,omitempty"`
-	Started     *float64 `json:"start,omitempty"`
+	ID            *float64 `json:"id,omitempty"` // a handle on it, for api_request
+	Name          string   `json:"name,omitempty"`
+	Path          string   `json:"path,omitempty"`
+	State         string   `json:"state,omitempty"`
+	Type          string   `json:"type,omitempty"`
+	Size          *float64 `json:"size,omitempty"`
+	Transferred   *float64 `json:"transferred,omitempty"`
+	Progress      *float64 `json:"progress,omitempty"`
+	TimeRemaining *float64 `json:"time_remaining,omitempty"` // the printer reports these
+	TimeElapsed   *float64 `json:"time_transferring,omitempty"`
+	Started       *float64 `json:"start,omitempty"` // Prusa Connect reports this
 }
 
 func compactTransfer(raw json.RawMessage) any {
@@ -125,12 +143,15 @@ func compactTransfer(raw json.RawMessage) any {
 		return nil
 	}
 	b := &transferBrief{
-		State:       str(m, "state"),
-		Type:        str(m, "type"),
-		Size:        num(m, "size"),
-		Transferred: num(m, "transferred"),
-		Progress:    num(m, "progress"),
-		Started:     num(m, "start"),
+		ID:            num(m, "id"),
+		State:         str(m, "state"),
+		Type:          str(m, "type"),
+		Size:          num(m, "size"),
+		Transferred:   num(m, "transferred"),
+		Progress:      num(m, "progress"),
+		TimeRemaining: num(m, "time_remaining"),
+		TimeElapsed:   num(m, "time_transferring"),
+		Started:       num(m, "start"),
 	}
 	for _, path := range [][]string{{"display_name"}, {"name"}, {"source_file", "display_name"}, {"source_file", "name"}} {
 		if b.Name = str(m, path...); b.Name != "" {
@@ -157,26 +178,32 @@ func compactTransfer(raw json.RawMessage) any {
 // routes. Connect's list is the printer's transfer history, newest first, and
 // every finished one carries an end; the printer itself only reports a
 // transfer while it is happening.
-func currentTransfer(raw json.RawMessage) json.RawMessage {
+func currentTransfer(raw json.RawMessage) (json.RawMessage, error) {
 	var outer struct {
-		Transfers []json.RawMessage `json:"transfers"`
+		Transfers *[]json.RawMessage `json:"transfers"`
 	}
-	if json.Unmarshal(raw, &outer) != nil || len(outer.Transfers) == 0 {
-		return json.RawMessage("null")
+	// "Nothing is being transferred" is the wrong answer to give when the
+	// reply couldn't be read: it is indistinguishable from the truth, and a
+	// caller watching an upload would conclude it had arrived. Elsewhere a
+	// changed field is reported as a changed API, and so here.
+	if err := json.Unmarshal(raw, &outer); err != nil || outer.Transfers == nil {
+		return nil, connect.Missing("GET", "/app/printers/{uuid}/transfers", "transfers")
 	}
-	for _, t := range outer.Transfers {
+	for _, t := range *outer.Transfers {
 		var one struct {
 			End   *float64 `json:"end"`
 			State string   `json:"state"`
 		}
-		if json.Unmarshal(t, &one) != nil {
-			continue
+		if err := json.Unmarshal(t, &one); err != nil {
+			return nil, connect.Missing("GET", "/app/printers/{uuid}/transfers", "transfers[]")
 		}
+		// Anything that has ended is history, however it ended; a transfer that
+		// failed is still worth reporting, so the caller knows why nothing came.
 		if one.End == nil && !strings.HasPrefix(one.State, "FIN") {
-			return t
+			return t, nil
 		}
 	}
-	return json.RawMessage("null")
+	return json.RawMessage("null"), nil
 }
 
 // busyFileAdvice explains PrusaLink's 409 on a file it still holds open. The
@@ -408,7 +435,10 @@ func (s *Server) addFileTools() {
 		if err != nil {
 			return nil, nil, err
 		}
-		out := startReport(stateOfPrinter(ctx, s, t.connect.UUID))
+		// Wait for the printer the same way the direct route does. Connect's
+		// record is telemetry-lagged, so reading it once reports the state from
+		// before the print started and calls a good start "not printing yet".
+		out := startReport(s.startedState(ctx, t))
 		out["started"], out["result"] = in.Path, res
 		return jsonResult(withVia(t, out))
 	})
@@ -514,8 +544,12 @@ func (s *Server) addFileTools() {
 		if err := s.connect.Get(ctx, printerPath(t.connect.UUID, "download-queue"), nil, &queue); err != nil {
 			return nil, nil, err
 		}
+		current, err := currentTransfer(transfers)
+		if err != nil {
+			return nil, nil, err
+		}
 		return jsonResult(withVia(t, map[string]any{
-			"transfer":       compactTransfer(currentTransfer(transfers)),
+			"transfer":       compactTransfer(current),
 			"download_queue": queue,
 		}))
 	})
@@ -529,13 +563,9 @@ func (s *Server) addFileTools() {
 		if len(in.Hashes) == 0 {
 			return nil, nil, errors.New("hashes is empty")
 		}
-		team := in.TeamID
-		if team == 0 {
-			p, err := s.connectPrinter(ctx, printerRef{})
-			if err != nil {
-				return nil, nil, err
-			}
-			team = p.TeamID
+		team, err := s.teamOf(ctx, in.printerRef, in.TeamID)
+		if err != nil {
+			return nil, nil, err
 		}
 		path := "/app/teams/" + strconv.FormatInt(team, 10) + "/files/raw"
 		body := map[string]any{"hashes": in.Hashes}
@@ -552,13 +582,9 @@ func (s *Server) addFileTools() {
 			"delete_printer_files removes files from the printer instead.",
 		Annotations: readOnly("List Connect files"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in connectFilesInput) (*mcp.CallToolResult, any, error) {
-		team := in.TeamID
-		if team == 0 {
-			p, err := s.connectPrinter(ctx, printerRef{})
-			if err != nil {
-				return nil, nil, fmt.Errorf("pass team_id: %w", err)
-			}
-			team = p.TeamID
+		team, err := s.teamOf(ctx, in.printerRef, in.TeamID)
+		if err != nil {
+			return nil, nil, err
 		}
 		var out json.RawMessage
 		path := "/app/teams/" + strconv.FormatInt(team, 10) + "/files"

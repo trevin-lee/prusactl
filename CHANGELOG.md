@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+- **The question about the plate came back.** 0.2.0 reworded tool errors on
+  their way out, and the terminal decided whether to ask "is the plate clear?"
+  by reading that same wording — so after a finished or stopped print,
+  `prusactl print` refused instead of asking. The rewording now happens once,
+  where the message is shown, and a test holds the two apart.
+- `prusactl cloud --printer` works. It was advertised as the way to pick a team
+  with several printers and did nothing on `cloud ls`, while `cloud rm` refused
+  the flag outright.
+- `prusactl download` runs the same code as `prusactl files get` again. They are
+  one command under two names, and 0.2.0 left them as two implementations:
+  `download` lost `--json`, and `files get X out/` quietly wrote a file named
+  `out` instead of writing into the folder.
+- `get_transfers` says when Prusa Connect's reply has changed shape instead of
+  reporting that nothing is being transferred, which is indistinguishable from
+  the truth and would tell an agent a file had arrived. It also keeps the
+  transfer's id, and the printer's own time remaining.
+- A firmware command the printer rejected is reported as REJECTED. `cmd send`
+  read the state the command was filed under, not the event that ended the
+  wait, so a rejected command came back as CREATED.
+- `start_print` through Prusa Connect waits for the printer like the direct
+  route does. Connect's record lags, so a print that started fine was reported
+  as "isn't printing yet".
+- `control_print` refuses on both routes when there is no job to act on, and no
+  longer returns a PrusaLink job number under the same name as a Prusa Connect
+  history id: they belong to different collections and only one works with
+  `jobs`.
+- Flags that don't apply to a subcommand are refused rather than ignored, as
+  arguments already were: `cmd ls --async`, `cloud rm --limit`, `files ls
+  --overwrite`, and `cmd send --async --timeout` (the timeout is the wait).
+- `prusactl camera --json` into a pipe says what it can't do instead of writing
+  a JPEG where JSON was asked for, and `prusactl dialog` reports the button the
+  printer matched rather than what was typed.
+
 ## 0.2.0 (2026-09-29)
 
 - The CLI does everything the agent can. `printers`, `print`, `start`, `pause`,

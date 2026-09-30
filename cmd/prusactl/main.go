@@ -52,7 +52,9 @@ func main() {
 	defer stop()
 	compat.Version = buildVersion()
 	if err := run(ctx, os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "prusactl:", err)
+		// The tools are written for an agent calling them by name; spell their
+		// arguments as flags on the way out, once, where a person reads them.
+		fmt.Fprintln(os.Stderr, "prusactl:", asFlags(err))
 		os.Exit(1)
 	}
 }
@@ -130,8 +132,6 @@ func run(ctx context.Context, args []string) error {
 		return noArguments(cmd, rest, func() error {
 			return server.New(session, cc, lc, lcErr, buildVersion()).Run(ctx)
 		})
-	case "download":
-		return download(ctx, lc, lcErr, rest)
 	case "api":
 		return apiCommand(ctx, cc, lc, lcErr, rest)
 	}
@@ -139,15 +139,19 @@ func run(ctx context.Context, args []string) error {
 	// The printer commands go through the MCP tools, so the CLI and an agent
 	// share one implementation and one set of safety checks.
 	handlers := map[string]func(context.Context, options, []string) error{
-		"printers":  printersCmd,
-		"print":     printCmd,
-		"start":     startCmd,
-		"pause":     controlCmd("pause"),
-		"resume":    controlCmd("resume"),
-		"stop":      controlCmd("stop"),
-		"gcode":     gcodeCmd,
-		"dialog":    dialogCmd,
-		"files":     filesCmd,
+		"printers": printersCmd,
+		"print":    printCmd,
+		"start":    startCmd,
+		"pause":    controlCmd("pause"),
+		"resume":   controlCmd("resume"),
+		"stop":     controlCmd("stop"),
+		"gcode":    gcodeCmd,
+		"dialog":   dialogCmd,
+		"files":    filesCmd,
+		// The old name for `files get`, kept working; it runs the same code.
+		"download": func(ctx context.Context, o options, pos []string) error {
+			return filesCmd(ctx, o, append([]string{"get"}, pos...))
+		},
 		"cloud":     cloudCmd,
 		"queue":     queueCmd,
 		"jobs":      jobsCmd,
@@ -420,32 +424,6 @@ func orText(a, b any) any {
 		return a
 	}
 	return b
-}
-
-func download(ctx context.Context, lc *link.Client, lcErr error, args []string) error {
-	opts, pos, err := lookup("download").parse(args)
-	if err != nil {
-		return err
-	}
-	if len(pos) == 0 || len(pos) > 2 {
-		return errors.New("download: usage: prusactl download [--overwrite] PATH [DEST], e.g. /usb/part.bgcode (see `prusactl help download`)")
-	}
-	if lc == nil {
-		return lcErr
-	}
-	dest := ""
-	if len(pos) == 2 {
-		dest = pos[1]
-	}
-	path, n, err := lc.Download(ctx, pos[0], dest, opts.on("overwrite"))
-	if errors.Is(err, link.ErrExists) {
-		return fmt.Errorf("%s already exists (add --overwrite to replace it)", path)
-	}
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Saved %s (%d bytes).\n", path, n)
-	return nil
 }
 
 func apiCommand(ctx context.Context, cc *connect.Client, lc *link.Client, lcErr error, args []string) error {

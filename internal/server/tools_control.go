@@ -82,23 +82,26 @@ type commandResult struct {
 }
 
 // commandFacts digs the id and the state out of whichever shape Connect used.
+// A command prusactl waited for comes back with both the record, whose state is
+// how it started (CREATED), and the event that ended the wait. The event is the
+// outcome, so it wins: a command the printer REJECTED must not be reported as
+// merely created.
 func commandFacts(raw json.RawMessage) (int64, string) {
-	m := decode(raw)
-	if inner, ok := m["command"].(map[string]any); ok {
+	outer := decode(raw)
+	m := outer
+	if inner, ok := outer["command"].(map[string]any); ok {
 		m = inner
 	}
 	var id int64
 	if n := num(m, "id"); n != nil {
 		id = int64(*n)
 	}
-	state := str(m, "state")
-	if state == "" {
-		// A command waited for reports how it ended as an event.
-		if ev, ok := decode(raw)["event"].(map[string]any); ok {
-			state = str(ev, "event")
+	if ev, ok := outer["event"].(map[string]any); ok {
+		if state := str(ev, "event"); state != "" {
+			return id, state
 		}
 	}
-	return id, state
+	return id, str(m, "state")
 }
 
 // runCommand validates a command against what the printer supports and its
@@ -188,6 +191,16 @@ func connectJobBefore(ctx context.Context, s *Server, uuid string) (string, int6
 		}
 	}
 	return state, id
+}
+
+// busyState reports whether the printer has a job that pause, resume or stop
+// could act on.
+func busyState(state string) bool {
+	switch strings.ToUpper(state) {
+	case "PRINTING", "PAUSED", "ATTENTION", "BUSY":
+		return true
+	}
+	return false
 }
 
 // commandStatus is what became of one command sent to the printer.
@@ -419,22 +432,32 @@ func (s *Server) addControlTools() {
 			if _, err := s.direct().JSON(ctx, req, nil); err != nil {
 				return nil, nil, err
 			}
-			return jsonResult(withVia(t, map[string]any{"action": action, "job_id": job.ID, "state_before": job.State}))
+			// printer_job_id, not job_id: this is PrusaLink's own number for the
+			// running job, which is a different thing from the Connect history
+			// id get_job takes.
+			return jsonResult(withVia(t, map[string]any{
+				"action": action, "printer_job_id": job.ID, "state_before": job.State,
+			}))
 		}
 		cmd := map[string]string{"pause": "PAUSE_PRINT", "resume": "RESUME_PRINT", "stop": "STOP_PRINT"}[action]
 		if cmd == "" {
 			return nil, nil, actionError(in.Action)
 		}
 		// What the job was before is the useful half of the answer, and only
-		// this side of the call knows it.
+		// this side of the call knows it. It is also how this route refuses a
+		// pause with nothing to pause, as the direct route does, rather than
+		// sending the command and failing further in.
 		before, jobID := connectJobBefore(ctx, s, t.connect.UUID)
+		if before != "" && !busyState(before) {
+			return nil, nil, fmt.Errorf("%s has no job to %s; it is %s", t.name, action, before)
+		}
 		res, err := s.runCommand(ctx, t.connect, cmd, nil, false, 0)
 		if err != nil {
 			return nil, nil, err
 		}
 		out := map[string]any{"action": action, "state_before": before, "result": res}
 		if jobID > 0 {
-			out["job_id"] = jobID
+			out["job_id"] = jobID // a Connect history id, which get_job takes
 		}
 		return jsonResult(withVia(t, out))
 	})

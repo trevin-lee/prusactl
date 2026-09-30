@@ -127,17 +127,6 @@ func (s *Server) startedState(ctx context.Context, t target) string {
 	return state
 }
 
-// stateOfPrinter reads the state Prusa Connect reports, so a start through
-// Connect can say how it went the way the direct route does. A printer that
-// won't say leaves the state empty rather than failing a print that started.
-func stateOfPrinter(ctx context.Context, s *Server, uuid string) string {
-	detail, err := s.printerDetail(ctx, uuid)
-	if err != nil {
-		return ""
-	}
-	return stateOf(detail)
-}
-
 // startReport describes the outcome of starting a print directly.
 func startReport(state string) map[string]any {
 	out := map[string]any{"printer_state": state, "printing": state == "PRINTING"}

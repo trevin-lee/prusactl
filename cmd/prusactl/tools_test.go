@@ -2,6 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -127,5 +130,75 @@ func TestCommandsWithoutFlagsStillRefuseOne(t *testing.T) {
 	ran := false
 	if err := noArguments(lookup("status"), nil, func() error { ran = true; return nil }); err != nil || !ran {
 		t.Errorf("plain status: %v", err)
+	}
+}
+
+// The tools' own words decide whether the terminal asks about the plate, so
+// nothing may reword an error before withPlateConfirm has read it. Rewriting
+// inside runTool once turned the question into a refusal, with no test to say
+// so: `prusactl print` after a finished print failed instead of asking.
+func TestPlateQuestionSurvivesTheWording(t *testing.T) {
+	// The sentence print_checks.go's plateErr produces.
+	plate := errors.New("prusa-core-one is FINISHED, so the last print may still be on the plate. " +
+		"Look at the printer (its camera, or ask the user), then call again with plate_clear=true")
+
+	if !needsPlateAnswer(plate) {
+		t.Fatal("withPlateConfirm would not ask: the prompt is dead")
+	}
+	// Rewording is for display only, and must happen after the decision above.
+	if got := asFlags(plate); !strings.Contains(got.Error(), "--plate-clear") {
+		t.Errorf("the reader is never told which flag to add: %v", got)
+	}
+	if needsPlateAnswer(asFlags(plate)) {
+		t.Error("the reworded error still matches; the ordering no longer matters, " +
+			"so a future move of asFlags back into runTool would go unnoticed")
+	}
+}
+
+// Every rewrite is a prose coupling to internal/server. A rule whose sentence
+// has moved stops firing silently, which is how the plate question broke.
+func TestEveryRewriteStillMatchesTheTools(t *testing.T) {
+	root, err := filepath.Abs("../../internal/server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all strings.Builder
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(root, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		all.Write(b)
+	}
+	// Go source escapes the quotes these sentences contain.
+	source := strings.ReplaceAll(all.String(), `\"`, `"`)
+	for _, r := range spellings {
+		if r.anchor == "" {
+			continue // interpolated; nothing stable to look for
+		}
+		if !strings.Contains(source, r.anchor) {
+			t.Errorf("no tool says %q any more, so %q is never rewritten", r.anchor, r.from)
+		}
+	}
+}
+
+// The sentences as a reader actually receives them.
+func TestRewritesReachTheReaderAsFlags(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"this only works through the direct connection (PrusaLink), so via=connect isn't possible here; leave via out",
+			"--via connect isn't possible here; leave --via out"},
+		{"/tmp/x.bgcode already exists; set overwrite to replace it", "add --overwrite to replace it"},
+		{"the account has 2 printers; pass printer as one of: a, b", "pass --printer as one of"},
+	} {
+		if got := asFlags(errors.New(tc.in)).Error(); !strings.Contains(got, tc.want) {
+			t.Errorf("asFlags(%q)\n = %q\nwant it to contain %q", tc.in, got, tc.want)
+		}
 	}
 }
