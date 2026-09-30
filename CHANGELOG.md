@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 (2026-09-29)
 
 - **The question about the plate came back.** 0.2.0 reworded tool errors on
   their way out, and the terminal decided whether to ask "is the plate clear?"
