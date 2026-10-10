@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-10-10)
 
 - `prusactl firmware` and the `get_firmware_status` and `update_firmware` tools,
   through Prusa Connect only. Status shows the running and the latest firmware
